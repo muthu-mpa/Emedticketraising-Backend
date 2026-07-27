@@ -107,15 +107,17 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(optio
 
 var app = builder.Build();
 
-var ffmpegFolder = Path.Combine(AppContext.BaseDirectory, "FFmpeg");
-if (!Directory.Exists(ffmpegFolder))
-    Directory.CreateDirectory(ffmpegFolder);
+//var ffmpegFolder = Path.Combine(AppContext.BaseDirectory, "FFmpeg");
+//if (!Directory.Exists(ffmpegFolder))
+//    Directory.CreateDirectory(ffmpegFolder);
 
-if (!File.Exists(Path.Combine(ffmpegFolder, "ffmpeg")) && !File.Exists(Path.Combine(ffmpegFolder, "ffmpeg.exe")))
-{
-    await FFmpegDownloader.GetLatestVersion(FFmpegVersion.Full, ffmpegFolder);
-}
-Xabe.FFmpeg.FFmpeg.SetExecutablesPath(ffmpegFolder);
+//if (!File.Exists(Path.Combine(ffmpegFolder, "ffmpeg")) && !File.Exists(Path.Combine(ffmpegFolder, "ffmpeg.exe")))
+//{
+//    await FFmpegDownloader.GetLatestVersion(FFmpegVersion.Full, ffmpegFolder);
+//}
+//Xabe.FFmpeg.FFmpeg.SetExecutablesPath(ffmpegFolder);
+
+Xabe.FFmpeg.FFmpeg.SetExecutablesPath("/usr/bin/");
 
 if (app.Environment.IsDevelopment())
 {

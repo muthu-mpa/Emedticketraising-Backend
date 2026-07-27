@@ -472,8 +472,42 @@ namespace TeamTrack.Controllers
             if (workItem == null)
                 return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
 
+          
             if (userRole != "ProductManager" && workItem.CreatedByUserId != userId)
                 return StatusCode(403, ApiResponse<string>.FailureResponse("Only the creator of this task can delete it"));
+
+            // Delete attachment files from storage before removing DB record
+            // Delete attachment files from storage before removing DB record
+            if (!string.IsNullOrEmpty(workItem.AttachmentUrls))
+            {
+                var urls = workItem.AttachmentUrls.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var url in urls)
+                {
+                    try
+                    {
+                        _fileService.DeleteScreenshot(url.Trim());
+                    }
+                    catch (Exception) { }
+                }
+            }
+
+            // If Bug-type, also delete the Bug's screenshot file from storage
+            // (Bug DB record will auto-delete via Cascade, but file won't)
+            if (workItem.WorkType != null && workItem.WorkType.Equals("Bug", StringComparison.OrdinalIgnoreCase))
+            {
+                var bugs = await _bugService.GetBugsByWorkItemAsync(workItem.Id);
+                foreach (var bug in bugs)
+                {
+                    if (!string.IsNullOrEmpty(bug.ScreenshotUrl))
+                    {
+                        try
+                        {
+                            _fileService.DeleteScreenshot(bug.ScreenshotUrl);
+                        }
+                        catch (Exception) { }
+                    }
+                }
+            }
 
             workItemRepo.Remove(workItem);
             await workItemRepo.SaveAsync();

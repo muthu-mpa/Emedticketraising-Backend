@@ -116,3 +116,5 @@ D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTra
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\TeamTrack.pdb
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\TeamTrack.genruntimeconfig.cache
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\ref\TeamTrack.dll
+D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\bin\Release\net8.0\Xabe.FFmpeg.dll
+D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\bin\Release\net8.0\Xabe.FFmpeg.Downloader.dll

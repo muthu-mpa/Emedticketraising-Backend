@@ -22,4 +22,6 @@ D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTra
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\PubTmp\Out\Swashbuckle.AspNetCore.SwaggerGen.dll
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\PubTmp\Out\Swashbuckle.AspNetCore.SwaggerUI.dll
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\PubTmp\Out\System.IdentityModel.Tokens.Jwt.dll
+D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\PubTmp\Out\Xabe.FFmpeg.dll
+D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\PubTmp\Out\Xabe.FFmpeg.Downloader.dll
 D:\myfirstconsoleapp\Emedticket- Back and frontend\TicketRaising-Backend\TeamTrack\obj\Release\net8.0\PubTmp\Out\TeamTrack.deps.json

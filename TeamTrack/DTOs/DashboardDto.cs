@@ -1,4 +1,4 @@
-namespace TeamTrack.DTOs
+﻿namespace TeamTrack.DTOs
 {
     public class DashboardResponseDto
     {
@@ -66,5 +66,60 @@ namespace TeamTrack.DTOs
         public string NoteText { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
         public string CreatedByName { get; set; } = string.Empty;
+    }
+
+    // ── ProductAdmin Dashboard ──
+    public class AdminDashboardResponseDto
+    {
+        public int TotalProjects { get; set; }
+        public int TotalEmployees { get; set; }
+        public int TotalWorkItems { get; set; }
+        public int TotalBugs { get; set; }
+        public AdminStatusCountDto StatusCounts { get; set; } = new();
+        public List<AdminEmployeeBreakdownDto> EmployeeBreakdown { get; set; } = [];
+    }
+
+    public class AdminStatusCountDto
+    {
+        public int Todo { get; set; }
+        public int Assigned { get; set; }
+        public int Reopen { get; set; }
+        public int InProgress { get; set; }
+        public int FutureRelease { get; set; }
+        public int Fixed { get; set; }
+        public int Completed { get; set; }
+        public int Closed { get; set; }
+        public int Open { get; set; }
+    }
+
+    public class AdminEmployeeBreakdownDto
+    {
+        public int EmployeeId { get; set; }
+        public string EmployeeName { get; set; } = "";
+        public int TotalAssigned { get; set; }
+        public int Todo { get; set; }
+        public int Assigned { get; set; }
+        public int Reopen { get; set; }
+        public int InProgress { get; set; }
+        public int FutureRelease { get; set; }
+        public int Fixed { get; set; }
+        public int Completed { get; set; }
+        public int Closed { get; set; }
+        public int Open { get; set; }
+    }
+
+    // ── Employee Dashboard ──
+    public class EmployeeDashboardResponseDto
+    {
+        public int TotalAssigned { get; set; }
+        public int TotalProjects { get; set; }
+        public AdminStatusCountDto StatusCounts { get; set; } = new();
+        public List<EmployeeProjectDto> AssignedProjects { get; set; } = [];
+    }
+
+    public class EmployeeProjectDto
+    {
+        public int ProjectId { get; set; }
+        public string ProjectName { get; set; } = "";
     }
 }

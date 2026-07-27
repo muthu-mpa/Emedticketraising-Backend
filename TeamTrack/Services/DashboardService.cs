@@ -132,5 +132,279 @@ namespace TeamTrack.Services
                 EmployeeWorkItemCounts = employeeCounts
             };
         }
+
+
+        public async Task<AdminDashboardResponseDto> GetAdminDashboardAsync(int? projectId, int? employeeId, DateTime? fromDate, DateTime? toDate)
+        {
+            // Total counts (unfiltered)
+            var totalProjects = await _projectRepo.Query().CountAsync();
+            var totalEmployees = await _userRepo.Query()
+                .Where(u => (u.UserType == "Employee" || u.UserType == "Both") && u.IsActive)
+                .CountAsync();
+
+            // Build filtered WorkItems query
+            var query = _workItemRepo.Query()
+                .Include(w => w.AssignedTo)
+                .AsQueryable();
+
+            if (projectId.HasValue)
+                query = query.Where(w => w.ProjectId == projectId.Value);
+
+            if (employeeId.HasValue)
+                query = query.Where(w => w.AssignedToUserId == employeeId.Value);
+
+            if (fromDate.HasValue)
+                query = query.Where(w => w.CreatedAt >= fromDate.Value);
+
+            if (toDate.HasValue)
+            {
+                var toDateEnd = toDate.Value.Date.AddDays(1);
+                query = query.Where(w => w.CreatedAt < toDateEnd);
+            }
+
+            var workItems = await query.ToListAsync();
+
+            // Separate tasks and bugs
+            var allItems = workItems;
+            var bugItems = allItems.Where(w => w.WorkType != null && w.WorkType.Equals("Bug", StringComparison.OrdinalIgnoreCase)).ToList();
+            var taskItems = allItems.Where(w => w.WorkType == null || !w.WorkType.Equals("Bug", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            // Status counts (all items — tasks + bugs combined)
+            var statusCounts = new AdminStatusCountDto
+            {
+                Todo = allItems.Count(w => w.Status == "pending"),
+                Assigned = allItems.Count(w => w.Status == "assigned"),
+                Reopen = allItems.Count(w => w.Status == "reopened"),
+                InProgress = allItems.Count(w => w.Status == "in_progress"),
+                FutureRelease = allItems.Count(w => w.Status == "future_release"),
+                Fixed = allItems.Count(w => w.Status == "fixed"),
+                Completed = allItems.Count(w => w.Status == "completed"),
+                Closed = allItems.Count(w => w.Status == "closed"),
+                Open = allItems.Count(w => w.Status == "open")
+            };
+
+            // Employee breakdown
+            var employeeBreakdown = new List<AdminEmployeeBreakdownDto>();
+
+            var groupedByEmployee = allItems
+                .Where(w => w.AssignedToUserId != null)
+                .GroupBy(w => new { w.AssignedToUserId, Name = w.AssignedTo?.Name ?? "Unknown" });
+
+            foreach (var group in groupedByEmployee)
+            {
+                var items = group.ToList();
+                employeeBreakdown.Add(new AdminEmployeeBreakdownDto
+                {
+                    EmployeeId = group.Key.AssignedToUserId ?? 0,
+                    EmployeeName = group.Key.Name,
+                    TotalAssigned = items.Count,
+                    Todo = items.Count(w => w.Status == "pending"),
+                    Assigned = items.Count(w => w.Status == "assigned"),
+                    Reopen = items.Count(w => w.Status == "reopened"),
+                    InProgress = items.Count(w => w.Status == "in_progress"),
+                    FutureRelease = items.Count(w => w.Status == "future_release"),
+                    Fixed = items.Count(w => w.Status == "fixed"),
+                    Completed = items.Count(w => w.Status == "completed"),
+                    Closed = items.Count(w => w.Status == "closed"),
+                    Open = items.Count(w => w.Status == "open")
+                });
+            }
+
+            return new AdminDashboardResponseDto
+            {
+                TotalProjects = totalProjects,
+                TotalEmployees = totalEmployees,
+                TotalWorkItems = taskItems.Count,
+                TotalBugs = bugItems.Count,
+                StatusCounts = statusCounts,
+                EmployeeBreakdown = employeeBreakdown.OrderBy(e => e.EmployeeName).ToList()
+            };
+        }
+
+        public async Task<EmployeeDashboardResponseDto> GetEmployeeDashboardAsync(int userId, int? projectId, DateTime? fromDate, DateTime? toDate)
+        {
+            // Get only this employee's assigned work items
+            var query = _workItemRepo.Query()
+                .Include(w => w.Project)
+                .Where(w => w.AssignedToUserId == userId);
+
+            if (projectId.HasValue)
+                query = query.Where(w => w.ProjectId == projectId.Value);
+
+            if (fromDate.HasValue)
+                query = query.Where(w => w.CreatedAt >= fromDate.Value);
+
+            if (toDate.HasValue)
+            {
+                var toDateEnd = toDate.Value.Date.AddDays(1);
+                query = query.Where(w => w.CreatedAt < toDateEnd);
+            }
+
+            var workItems = await query.ToListAsync();
+
+            // Status counts
+            var statusCounts = new AdminStatusCountDto
+            {
+                Todo = workItems.Count(w => w.Status == "pending"),
+                Assigned = workItems.Count(w => w.Status == "assigned"),
+                Reopen = workItems.Count(w => w.Status == "reopened"),
+                InProgress = workItems.Count(w => w.Status == "in_progress"),
+                FutureRelease = workItems.Count(w => w.Status == "future_release"),
+                Fixed = workItems.Count(w => w.Status == "fixed"),
+                Completed = workItems.Count(w => w.Status == "completed"),
+                Closed = workItems.Count(w => w.Status == "closed"),
+                Open = workItems.Count(w => w.Status == "open")
+            };
+
+            // Only projects assigned to this employee (for dropdown)
+            var assignedProjects = await _workItemRepo.Query()
+                .Where(w => w.AssignedToUserId == userId)
+                .Include(w => w.Project)
+                .Select(w => new EmployeeProjectDto
+                {
+                    ProjectId = w.ProjectId,
+                    ProjectName = w.Project!.Name
+                })
+                .Distinct()
+                .OrderBy(p => p.ProjectName)
+                .ToListAsync();
+
+            return new EmployeeDashboardResponseDto
+            {
+                TotalAssigned = workItems.Count,
+                TotalProjects = assignedProjects.Count,
+                StatusCounts = statusCounts,
+                AssignedProjects = assignedProjects
+            };
+        }
+
+        public async Task<byte[]> ExportAdminCsvAsync(int? projectId, int? employeeId, DateTime? fromDate, DateTime? toDate, string? status, string? priority, string? workType, int? moduleId, int? clientId, string? raisedBuild, string? fixedBuild, string? columns)
+        {
+            var query = BuildExportQuery(projectId, employeeId, fromDate, toDate, status, priority, workType, moduleId, clientId, raisedBuild, fixedBuild);
+            var workItems = await query.OrderBy(w => w.ProjectId).ThenBy(w => w.CreatedAt).ToListAsync();
+            return GenerateCsv(workItems, columns);
+        }
+
+        public async Task<byte[]> ExportEmployeeCsvAsync(int userId, int? projectId, DateTime? fromDate, DateTime? toDate, string? status, string? priority, string? workType, int? moduleId, int? clientId, string? raisedBuild, string? fixedBuild, string? columns)
+        {
+            var query = BuildExportQuery(projectId, userId, fromDate, toDate, status, priority, workType, moduleId, clientId, raisedBuild, fixedBuild);
+            var workItems = await query.OrderBy(w => w.ProjectId).ThenBy(w => w.CreatedAt).ToListAsync();
+            return GenerateCsv(workItems, columns);
+        }
+
+        private static readonly Dictionary<string, Func<WorkItem, string>> ColumnMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "WorkNumber", w => Escape(w.WorkNumber) },
+            { "Title", w => Escape(w.Title) },
+            { "Description", w => Escape(w.Description) },
+            { "Status", w => Escape(w.Status) },
+            { "Priority", w => Escape(w.Priority) },
+            { "WorkType", w => Escape(w.WorkType) },
+            { "AssignedTo", w => Escape(w.AssignedTo?.Name) },
+            { "CreatedBy", w => Escape(w.CreatedBy?.Name) },
+            { "ProjectName", w => Escape(w.Project?.Name) },
+            { "ModuleName", w => Escape(w.Module?.Name) },
+            { "Severity", w => "" },
+            { "IssueType", w => "" },
+            { "EpicName", w => Escape(w.EpicName) },
+            { "RaisedBuild", w => Escape(w.RaisedBuild) },
+            { "FixedBuild", w => Escape(w.FixedBuild) },
+            { "Labels", w => Escape(w.Labels) },
+            { "Team", w => Escape(w.Team) },
+            { "DueDate", w => w.DueDate?.ToString("dd/MM/yyyy") ?? "" },
+            { "StartDate", w => w.StartDate?.ToString("dd/MM/yyyy") ?? "" },
+            { "CreatedAt", w => w.CreatedAt.ToString("dd/MM/yyyy HH:mm") },
+            { "UpdatedAt", w => w.UpdatedAt.ToString("dd/MM/yyyy HH:mm") }
+        };
+
+        private static byte[] GenerateCsv(List<WorkItem> workItems, string? columns)
+        {
+            // If columns specified, use only those; otherwise use all
+            var selectedColumns = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(columns))
+            {
+                foreach (var col in columns.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmed = col.Trim();
+                    if (ColumnMap.ContainsKey(trimmed))
+                        selectedColumns.Add(trimmed);
+                }
+            }
+
+            if (selectedColumns.Count == 0)
+                selectedColumns = ColumnMap.Keys.ToList();
+
+            var sb = new System.Text.StringBuilder();
+
+            // Header row
+            sb.AppendLine(string.Join(",", selectedColumns));
+
+            // Data rows
+            foreach (var w in workItems)
+            {
+                var values = selectedColumns.Select(col => ColumnMap[col](w));
+                sb.AppendLine(string.Join(",", values));
+            }
+
+            return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        }
+
+
+        private IQueryable<WorkItem> BuildExportQuery(int? projectId, int? employeeId, DateTime? fromDate, DateTime? toDate, string? status, string? priority, string? workType, int? moduleId, int? clientId, string? raisedBuild, string? fixedBuild)
+        {
+            var query = _workItemRepo.Query()
+                .Include(w => w.Project)
+                .Include(w => w.AssignedTo)
+                .Include(w => w.CreatedBy)
+                .Include(w => w.Module)
+                .AsQueryable();
+
+            if (projectId.HasValue)
+                query = query.Where(w => w.ProjectId == projectId.Value);
+
+            if (employeeId.HasValue)
+                query = query.Where(w => w.AssignedToUserId == employeeId.Value);
+
+            if (fromDate.HasValue)
+                query = query.Where(w => w.CreatedAt >= fromDate.Value);
+
+            if (toDate.HasValue)
+            {
+                var toDateEnd = toDate.Value.Date.AddDays(1);
+                query = query.Where(w => w.CreatedAt < toDateEnd);
+            }
+
+            if (!string.IsNullOrEmpty(status))
+                query = query.Where(w => w.Status == status.ToLower());
+
+            if (!string.IsNullOrEmpty(priority))
+                query = query.Where(w => w.Priority == priority.ToLower());
+
+            if (!string.IsNullOrEmpty(workType))
+                query = query.Where(w => w.WorkType != null && w.WorkType.ToLower() == workType.ToLower());
+
+            if (moduleId.HasValue)
+                query = query.Where(w => w.ModuleId == moduleId.Value);
+
+            if (clientId.HasValue)
+                query = query.Where(w => w.Project != null && w.Project.ClientId == clientId.Value);
+
+            if (!string.IsNullOrEmpty(raisedBuild))
+                query = query.Where(w => w.RaisedBuild == raisedBuild);
+
+            if (!string.IsNullOrEmpty(fixedBuild))
+                query = query.Where(w => w.FixedBuild == fixedBuild);
+
+            return query;
+        }
+
+        private static string Escape(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+                return "\"" + value.Replace("\"", "\"\"") + "\"";
+            return value;
+        }
     }
 }
