@@ -782,6 +782,9 @@ namespace TeamTrack.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("by_user_id");
 
+                    b.Property<string>("FieldName")
+                        .HasColumnType("text");
+
                     b.Property<string>("FromStatus")
                         .HasColumnType("text")
                         .HasColumnName("from_status");
@@ -790,9 +793,15 @@ namespace TeamTrack.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("from_user_id");
 
+                    b.Property<string>("NewValue")
+                        .HasColumnType("text");
+
                     b.Property<string>("Note")
                         .HasColumnType("text")
                         .HasColumnName("note");
+
+                    b.Property<string>("OldValue")
+                        .HasColumnType("text");
 
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("timestamp with time zone")

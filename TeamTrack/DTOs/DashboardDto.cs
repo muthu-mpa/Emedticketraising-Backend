@@ -122,4 +122,10 @@
         public int ProjectId { get; set; }
         public string ProjectName { get; set; } = "";
     }
+
+    public class StatusOptionDto
+    {
+        public string Value { get; set; } = "";
+        public string Label { get; set; } = "";
+    }
 }

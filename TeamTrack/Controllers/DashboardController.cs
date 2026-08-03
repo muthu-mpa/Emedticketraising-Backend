@@ -109,5 +109,53 @@ namespace TeamTrack.Controllers
             };
             return Ok(ApiResponse<string[]>.SuccessResponse(columns, "Available export columns"));
         }
+
+
+        [HttpGet("statuses")]
+        [Authorize]
+        public IActionResult GetStatuses()
+        {
+            var statuses = new List<StatusOptionDto>
+            {
+                new() { Value = "pending", Label = "Open" },
+                new() { Value = "assigned", Label = "Assigned" },
+                new() { Value = "reopened", Label = "Reopen" },
+                new() { Value = "fixed", Label = "Fixed" },
+                new() { Value = "completed", Label = "Resolved" },
+                new() { Value = "future_release", Label = "Moved to future release" }
+            };
+            return Ok(ApiResponse<List<StatusOptionDto>>.SuccessResponse(statuses, "Statuses"));
+        }
+
+
+        [HttpGet("admin/workitems")]
+        [Authorize(Roles = "ProductManager")]
+        public async Task<IActionResult> GetAdminWorkItems(
+            [FromQuery] int? projectId,
+            [FromQuery] string tab = "all",
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
+        {
+            var result = await _dashboardService.GetAdminWorkItemsAsync(projectId, tab, page, pageSize);
+            return Ok(ApiResponse<PagedResult<WorkItemResponseDto>>.SuccessResponse(result, "Work items fetched successfully"));
+        }
+
+
+        [HttpGet("employee/workitems")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> GetEmployeeWorkItems(
+             [FromQuery] int? projectId,
+             [FromQuery] int page = 1,
+             [FromQuery] int pageSize = 20,
+             [FromQuery] string? search = null,
+             [FromQuery] string? status = null,
+             [FromQuery] int? assignedToUserId = null,
+             [FromQuery] DateTime? fromDueDate = null,
+             [FromQuery] DateTime? toDueDate = null)
+        {
+            var userId = int.Parse(User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier)!);
+            var result = await _dashboardService.GetEmployeeWorkItemsAsync(userId, projectId, "all", page, pageSize, search, status, assignedToUserId, fromDueDate, toDueDate);
+            return Ok(ApiResponse<PagedResult<WorkItemResponseDto>>.SuccessResponse(result, "Work items fetched successfully"));
+        }
     }
 }

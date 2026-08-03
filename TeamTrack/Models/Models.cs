@@ -175,6 +175,9 @@ namespace TeamTrack.Models
         public int? ToUserId { get; set; }
         public string? FromStatus { get; set; }
         public string? ToStatus { get; set; }
+        public string? FieldName { get; set; }
+        public string? OldValue { get; set; }
+        public string? NewValue { get; set; }
         public int ByUserId { get; set; }
         public string? Note { get; set; }
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;

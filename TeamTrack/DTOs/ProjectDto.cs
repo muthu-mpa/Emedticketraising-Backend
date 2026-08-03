@@ -143,6 +143,9 @@ namespace TeamTrack.DTOs
         public string? ToUser { get; set; }
         public string? FromStatus { get; set; }
         public string? ToStatus { get; set; }
+        public string? FieldName { get; set; }
+        public string? OldValue { get; set; }
+        public string? NewValue { get; set; }
         public string ByUser { get; set; } = string.Empty;
         public string? Note { get; set; }
         public DateTime Timestamp { get; set; }

@@ -180,7 +180,10 @@ namespace TeamTrack.Services
                 .AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(status) && status != "all")
-                query = query.Where(b => b.Status == status);
+            {
+                var statuses = ProjectService.ResolveStatusFilter(status);
+                query = query.Where(b => statuses.Contains(b.Status));
+            }
 
             if (!string.IsNullOrWhiteSpace(date) && DateOnly.TryParse(date, out var parsedDate))
             {
@@ -229,7 +232,10 @@ namespace TeamTrack.Services
                 .AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(status) && status != "all")
-                query = query.Where(b => b.Status == status);
+            {
+                var statuses = ProjectService.ResolveStatusFilter(status);
+                query = query.Where(b => statuses.Contains(b.Status));
+            }
 
             if (!string.IsNullOrWhiteSpace(date) && DateOnly.TryParse(date, out var parsedDate))
             {

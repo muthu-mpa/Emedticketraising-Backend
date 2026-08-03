@@ -287,7 +287,15 @@ namespace TeamTrack.Services
 
         public async Task<byte[]> ExportEmployeeCsvAsync(int userId, int? projectId, DateTime? fromDate, DateTime? toDate, string? status, string? priority, string? workType, int? moduleId, int? clientId, string? raisedBuild, string? fixedBuild, string? columns)
         {
-            var query = BuildExportQuery(projectId, userId, fromDate, toDate, status, priority, workType, moduleId, clientId, raisedBuild, fixedBuild);
+            // Get projects this employee is a member of
+            var memberProjectIds = await _projectRepo.Query()
+                .Where(p => p.AssignedEmployees.Any(u => u.Id == userId))
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            var query = BuildExportQuery(projectId, null, fromDate, toDate, status, priority, workType, moduleId, clientId, raisedBuild, fixedBuild);
+            query = query.Where(w => memberProjectIds.Contains(w.ProjectId));
+
             var workItems = await query.OrderBy(w => w.ProjectId).ThenBy(w => w.CreatedAt).ToListAsync();
             return GenerateCsv(workItems, columns);
         }
@@ -297,7 +305,7 @@ namespace TeamTrack.Services
             { "WorkNumber", w => Escape(w.WorkNumber) },
             { "Title", w => Escape(w.Title) },
             { "Description", w => Escape(w.Description) },
-            { "Status", w => Escape(w.Status) },
+              { "Status", w => Escape(GetStatusLabel(w.Status)) },
             { "Priority", w => Escape(w.Priority) },
             { "WorkType", w => Escape(w.WorkType) },
             { "AssignedTo", w => Escape(w.AssignedTo?.Name) },
@@ -376,7 +384,10 @@ namespace TeamTrack.Services
             }
 
             if (!string.IsNullOrEmpty(status))
-                query = query.Where(w => w.Status == status.ToLower());
+            {
+                var statuses = ProjectService.ResolveStatusFilter(status);
+                query = query.Where(w => statuses.Contains(w.Status));
+            }
 
             if (!string.IsNullOrEmpty(priority))
                 query = query.Where(w => w.Priority == priority.ToLower());
@@ -399,12 +410,287 @@ namespace TeamTrack.Services
             return query;
         }
 
+
+        private static readonly Dictionary<string, string> StatusLabelMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "pending", "Open" },
+            { "assigned", "Assigned" },
+            { "reopened", "Reopen" },
+            { "in_progress", "In Progress" },
+            { "future_release", "Moved to future release" },
+            { "fixed", "Fixed" },
+            { "completed", "Resolved" },
+            { "closed", "Closed" },
+            { "open", "Open" }
+        };
+
+        private static string GetStatusLabel(string? status)
+        {
+            if (string.IsNullOrEmpty(status)) return "";
+            return StatusLabelMap.TryGetValue(status, out var label) ? label : status;
+        }
+
         private static string Escape(string? value)
         {
             if (string.IsNullOrEmpty(value)) return "";
             if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
                 return "\"" + value.Replace("\"", "\"\"") + "\"";
             return value;
+        }
+
+
+        // Status ordering: UnAssigned(pending)=0, Assigned=1, Reopen=2, Fixed=3, Resolved(completed)=4, FutureRelease=5, rest=6
+        private static int GetStatusOrder(string? status) => status switch
+        {
+            "pending" => 0,
+            "assigned" => 1,
+            "reopened" => 2,
+            "fixed" => 3,
+            "completed" => 4,
+            "future_release" => 5,
+            _ => 6
+        };
+
+        public async Task<PagedResult<WorkItemResponseDto>> GetAdminWorkItemsAsync(int? projectId, string tab, int page, int pageSize)
+        {
+            var query = _workItemRepo.Query()
+                .Include(w => w.Project).ThenInclude(p => p.Client)
+                .Include(w => w.AssignedTo)
+                .Include(w => w.CreatedBy)
+                .Include(w => w.Module).ThenInclude(m => m.Product)
+                .AsQueryable();
+
+            if (projectId.HasValue)
+                query = query.Where(w => w.ProjectId == projectId.Value);
+
+            if (tab == "open")
+                query = query.Where(w => w.Status == "pending" || w.Status == "assigned" || w.Status == "reopened" || w.Status == "future_release");
+            else if (tab == "closed")
+                query = query.Where(w => w.Status == "fixed" || w.Status == "completed");
+
+            var totalCount = await query.CountAsync();
+
+            // Load all for sorting by custom status order, then paginate
+            var allItems = await query.ToListAsync();
+            var pagedItems = allItems
+                .OrderBy(w => GetStatusOrder(w.Status))
+                .ThenByDescending(w => w.CreatedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+
+            // Map to DTO
+            //var bugRepo = _serviceProvider.GetRequiredService<IRepository<Bug>>();
+            var bugDict = (await _bugRepo.Query()
+                 .Where(b => pagedItems.Select(w => w.Id).Contains(b.WorkItemId))
+                 .ToListAsync())
+                .GroupBy(b => b.WorkItemId)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(b => b.Id).First());
+
+            var parentIds = pagedItems.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
+            var parentDict = parentIds.Count > 0
+                ? await _workItemRepo.Query().Where(w => parentIds.Contains(w.Id)).ToDictionaryAsync(w => w.Id, w => w)
+                : new Dictionary<int, WorkItem>();
+
+            var items = pagedItems.Select(w =>
+            {
+                var dto = new WorkItemResponseDto
+                {
+                    Id = w.Id,
+                    WorkNumber = w.WorkNumber,
+                    Title = w.Title,
+                    Description = w.Description,
+                    Status = w.Status,
+                    Priority = w.Priority,
+                    WorkType = w.WorkType,
+                    StartDate = w.StartDate,
+                    ParentId = w.ParentId,
+                    Labels = w.Labels,
+                    Team = w.Team,
+                    AttachmentUrls = w.AttachmentUrls,
+                    EpicName = w.EpicName,
+                    EpicColor = w.EpicColor,
+                    ProjectId = w.ProjectId,
+                    ProjectName = w.Project?.Name ?? "",
+                    ProjectNumber = w.Project?.ProjectNumber ?? "",
+                    AssignedTo = w.AssignedTo?.Name,
+                    CreatedBy = w.CreatedBy?.Name ?? "",
+                    ModuleId = w.ModuleId,
+                    ModuleName = w.Module?.Name,
+                    ProductId = w.Module?.ProductId,
+                    ProductName = w.Module?.Product?.Name,
+                    ClientId = w.Project?.ClientId,
+                    ClientName = w.Project?.Client?.Name,
+                    CreatedAt = w.CreatedAt,
+                    DueDate = w.DueDate,
+                    AssignedToUserId = w.AssignedToUserId,
+                    FixedBillNumber = w.FixedBillNumber,
+                    RaisedBillNumber = w.RaisedBillNumber,
+                    DeveloperBillLock = w.DeveloperBillLock,
+                    CreatedByUserId = w.CreatedByUserId,
+                    RaisedBuild = w.RaisedBuild,
+                    FixedBuild = w.FixedBuild
+                };
+
+                if (w.ParentId.HasValue && parentDict.TryGetValue(w.ParentId.Value, out var parent))
+                {
+                    dto.ParentWorkNumber = parent.WorkNumber;
+                    dto.ParentTitle = parent.Title;
+                    dto.ParentEpicName = parent.EpicName;
+                    dto.ParentEpicColor = parent.EpicColor;
+                }
+
+                if (bugDict.TryGetValue(w.Id, out var bug))
+                {
+                    dto.Severity = bug.Severity;
+                    dto.IssueType = bug.IssueType;
+                    if (!string.IsNullOrEmpty(bug.RaisedBuild)) dto.RaisedBuild = bug.RaisedBuild;
+                    if (!string.IsNullOrEmpty(bug.FixedBuild)) dto.FixedBuild = bug.FixedBuild;
+                }
+
+                return dto;
+            }).ToList();
+
+            return new PagedResult<WorkItemResponseDto>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            };
+        }
+
+
+        public async Task<PagedResult<WorkItemResponseDto>> GetEmployeeWorkItemsAsync(int userId, int? projectId, string tab, int page, int pageSize, string? search, string? status, int? assignedToUserId, DateTime? fromDueDate, DateTime? toDueDate)
+        {
+            // Get projects this employee is a member of
+            var memberProjectIds = await _projectRepo.Query()
+                .Where(p => p.AssignedEmployees.Any(u => u.Id == userId))
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            var query = _workItemRepo.Query()
+                .Include(w => w.Project).ThenInclude(p => p.Client)
+                .Include(w => w.AssignedTo)
+                .Include(w => w.CreatedBy)
+                .Include(w => w.Module).ThenInclude(m => m.Product)
+                .Where(w => memberProjectIds.Contains(w.ProjectId));
+
+            if (projectId.HasValue)
+                query = query.Where(w => w.ProjectId == projectId.Value);
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.ToLower();
+                query = query.Where(w => w.Title.ToLower().Contains(s) || w.WorkNumber.ToLower().Contains(s));
+            }
+
+
+            // Multi-select status filter (comma separated: "pending,assigned,reopened")
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var statusList = ProjectService.ResolveStatusFilter(status);
+                query = query.Where(w => statusList.Contains(w.Status));
+            }
+
+            if (assignedToUserId.HasValue)
+                query = query.Where(w => w.AssignedToUserId == assignedToUserId.Value);
+
+            if (fromDueDate.HasValue)
+                query = query.Where(w => w.DueDate >= fromDueDate.Value);
+
+            if (toDueDate.HasValue)
+            {
+                var toDueDateEnd = toDueDate.Value.Date.AddDays(1);
+                query = query.Where(w => w.DueDate < toDueDateEnd);
+            }
+
+
+            var totalCount = await query.CountAsync();
+
+            var allItems = await query.ToListAsync();
+            var pagedItems = allItems
+                .OrderBy(w => GetStatusOrder(w.Status))
+                .ThenByDescending(w => w.CreatedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+
+            var bugMap = await _bugRepo.Query()
+                .Where(b => pagedItems.Select(w => w.Id).Contains(b.WorkItemId))
+                .ToDictionaryAsync(b => b.WorkItemId, b => b);
+
+            var parentIds = pagedItems.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
+            var parentDict = parentIds.Count > 0
+                ? await _workItemRepo.Query().Where(w => parentIds.Contains(w.Id)).ToDictionaryAsync(w => w.Id, w => w)
+                : new Dictionary<int, WorkItem>();
+
+            var items = pagedItems.Select(w =>
+            {
+                var dto = new WorkItemResponseDto
+                {
+                    Id = w.Id,
+                    WorkNumber = w.WorkNumber,
+                    Title = w.Title,
+                    Description = w.Description,
+                    Status = w.Status,
+                    Priority = w.Priority,
+                    WorkType = w.WorkType,
+                    StartDate = w.StartDate,
+                    ParentId = w.ParentId,
+                    Labels = w.Labels,
+                    Team = w.Team,
+                    AttachmentUrls = w.AttachmentUrls,
+                    EpicName = w.EpicName,
+                    EpicColor = w.EpicColor,
+                    ProjectId = w.ProjectId,
+                    ProjectName = w.Project?.Name ?? "",
+                    ProjectNumber = w.Project?.ProjectNumber ?? "",
+                    AssignedTo = w.AssignedTo?.Name,
+                    CreatedBy = w.CreatedBy?.Name ?? "",
+                    ModuleId = w.ModuleId,
+                    ModuleName = w.Module?.Name,
+                    ProductId = w.Module?.ProductId,
+                    ProductName = w.Module?.Product?.Name,
+                    ClientId = w.Project?.ClientId,
+                    ClientName = w.Project?.Client?.Name,
+                    CreatedAt = w.CreatedAt,
+                    DueDate = w.DueDate,
+                    AssignedToUserId = w.AssignedToUserId,
+                    FixedBillNumber = w.FixedBillNumber,
+                    RaisedBillNumber = w.RaisedBillNumber,
+                    DeveloperBillLock = w.DeveloperBillLock,
+                    CreatedByUserId = w.CreatedByUserId,
+                    RaisedBuild = w.RaisedBuild,
+                    FixedBuild = w.FixedBuild
+                };
+
+                if (w.ParentId.HasValue && parentDict.TryGetValue(w.ParentId.Value, out var parent))
+                {
+                    dto.ParentWorkNumber = parent.WorkNumber;
+                    dto.ParentTitle = parent.Title;
+                    dto.ParentEpicName = parent.EpicName;
+                    dto.ParentEpicColor = parent.EpicColor;
+                }
+
+                if (bugMap.TryGetValue(w.Id, out var bug))
+                {
+                    dto.Severity = bug.Severity;
+                    dto.IssueType = bug.IssueType;
+                    if (!string.IsNullOrEmpty(bug.RaisedBuild)) dto.RaisedBuild = bug.RaisedBuild;
+                    if (!string.IsNullOrEmpty(bug.FixedBuild)) dto.FixedBuild = bug.FixedBuild;
+                }
+
+                return dto;
+            }).ToList();
+
+            return new PagedResult<WorkItemResponseDto>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            };
         }
     }
 }

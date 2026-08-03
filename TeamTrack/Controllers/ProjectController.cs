@@ -395,6 +395,30 @@ namespace TeamTrack.Controllers
             if (userRole != "ProductManager" && workItem.CreatedByUserId != userId)
                 return StatusCode(403, ApiResponse<string>.FailureResponse("Only the creator of this task can edit it"));
 
+            // ?? Capture old values for audit trail ??
+            var oldValues = new Dictionary<string, string?>
+            {
+                { "Title", workItem.Title },
+                { "Description", workItem.Description },
+                { "Priority", workItem.Priority },
+                { "Status", workItem.Status },
+                { "ModuleId", workItem.ModuleId?.ToString() },
+                { "StartDate", workItem.StartDate?.ToString("dd/MM/yyyy") },
+                { "DueDate", workItem.DueDate?.ToString("dd/MM/yyyy") },
+                { "Labels", workItem.Labels },
+                { "Team", workItem.Team },
+                { "ParentId", workItem.ParentId?.ToString() },
+                { "EpicName", workItem.EpicName },
+                { "EpicColor", workItem.EpicColor },
+                { "RaisedBuild", workItem.RaisedBuild },
+                { "FixedBuild", workItem.FixedBuild },
+                { "AssignedToUserId", workItem.AssignedToUserId?.ToString() },
+                { "AttachmentUrls", workItem.AttachmentUrls },
+                { "FixedBillNumber", workItem.FixedBillNumber },
+                { "RaisedBillNumber", workItem.RaisedBillNumber }
+            };
+
+
             workItem.Title = request.Title.Trim();
             workItem.Description = request.Description?.Trim();
             if (!string.IsNullOrWhiteSpace(request.Status))
@@ -421,6 +445,51 @@ namespace TeamTrack.Controllers
             workItem.UpdatedAt = DateTime.UtcNow;
 
             await workItemRepo.SaveAsync();
+
+            // ?? Write audit trail for every changed field ??
+            var newValues = new Dictionary<string, string?>
+            {
+                { "Title", workItem.Title },
+                { "Description", workItem.Description },
+                { "Priority", workItem.Priority },
+                { "Status", workItem.Status },
+                { "ModuleId", workItem.ModuleId?.ToString() },
+                { "StartDate", workItem.StartDate?.ToString("dd/MM/yyyy") },
+                { "DueDate", workItem.DueDate?.ToString("dd/MM/yyyy") },
+                { "Labels", workItem.Labels },
+                { "Team", workItem.Team },
+                { "ParentId", workItem.ParentId?.ToString() },
+                { "EpicName", workItem.EpicName },
+                { "EpicColor", workItem.EpicColor },
+                { "RaisedBuild", workItem.RaisedBuild },
+                { "FixedBuild", workItem.FixedBuild },
+                { "AssignedToUserId", workItem.AssignedToUserId?.ToString() },
+                { "AttachmentUrls", workItem.AttachmentUrls },
+                { "FixedBillNumber", workItem.FixedBillNumber },
+                { "RaisedBillNumber", workItem.RaisedBillNumber }
+            };
+
+            var activityRepo = HttpContext.RequestServices.GetRequiredService<IRepository<WorkItemActivityLog>>();
+            foreach (var field in oldValues.Keys)
+            {
+                var oldVal = oldValues[field];
+                var newVal = newValues[field];
+
+                if ((oldVal ?? "") != (newVal ?? ""))
+                {
+                    await activityRepo.AddAsync(new WorkItemActivityLog
+                    {
+                        WorkItemId = workItem.Id,
+                        Action = "FieldChanged",
+                        FieldName = field,
+                        OldValue = oldVal ?? "",
+                        NewValue = newVal ?? "",
+                        ByUserId = userId,
+                        Timestamp = DateTime.UtcNow
+                    });
+                }
+            }
+            await activityRepo.SaveAsync();
 
             var bugRepo = HttpContext.RequestServices.GetRequiredService<IRepository<Bug>>();
             var bug = await bugRepo.GetAsync(b => b.WorkItemId == workItemId);

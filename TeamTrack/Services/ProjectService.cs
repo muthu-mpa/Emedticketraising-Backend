@@ -384,7 +384,7 @@ namespace TeamTrack.Services
 
             if (!string.IsNullOrWhiteSpace(status) && status != "all")
             {
-                var statuses = status.Split(',').Select(s => s.Trim()).ToList();
+                var statuses = ResolveStatusFilter(status);
                 query = query.Where(w => statuses.Contains(w.Status));
             }
 
@@ -444,21 +444,76 @@ namespace TeamTrack.Services
             return items.Select(w => MapWorkItemToDto(w, parents)).ToList();
         }
 
+        //public async Task<PagedResult<WorkItemResponseDto>> GetWorkItemsByEmployeePagedAsync(int userId, int page, int pageSize, string? status, string? dueDate, string? search, string? workType = null, string? priority = null)
+        //{
+        //    var query = _workItemRepo.Query()
+        //        .Include(w => w.Project)
+        //            .ThenInclude(p => p.Client)
+        //        .Include(w => w.Module)
+        //            .ThenInclude(m => m.Product)
+        //        .Include(w => w.AssignedTo)
+        //        .Include(w => w.CreatedBy)
+        //        .Where(w => w.AssignedToUserId == userId)
+        //        .AsQueryable();
+
+        //    if (!string.IsNullOrWhiteSpace(status) && status != "all")
+        //    {
+        //        var statuses = status.Split(',').Select(s => s.Trim()).ToList();
+        //        query = query.Where(w => statuses.Contains(w.Status));
+        //    }
+
+        //    if (!string.IsNullOrWhiteSpace(workType) && workType != "all")
+        //        query = query.Where(w => w.WorkType.ToLower() == workType.ToLower());
+
+        //    if (!string.IsNullOrWhiteSpace(priority) && priority != "all")
+        //        query = query.Where(w => w.Priority.ToLower() == priority.ToLower());
+
+        //    if (!string.IsNullOrWhiteSpace(dueDate) && DateOnly.TryParse(dueDate, out var parsedDate))
+        //    {
+        //        var startDate = parsedDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        //        var endDate = parsedDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
+        //        query = query.Where(w => w.DueDate.HasValue && w.DueDate.Value >= startDate && w.DueDate.Value <= endDate);
+        //    }
+
+        //    if (!string.IsNullOrWhiteSpace(search))
+        //        query = query.Where(w => w.Title.Contains(search) || w.WorkNumber.Contains(search));
+
+        //    var totalCount = await query.CountAsync();
+        //    var items = await query
+        //        .OrderBy(w => w.CreatedAt)
+        //        .Skip((page - 1) * pageSize)
+        //        .Take(pageSize)
+        //        .ToListAsync();
+
+        //    var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
+        //    var parents = await _workItemRepo.Query().Where(p => parentIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id);
+
+        //    return new PagedResult<WorkItemResponseDto>
+        //    {
+        //        Items = items.Select(w => MapWorkItemToDto(w, parents)).ToList(),
+        //        TotalCount = totalCount,
+        //        Page = page,
+        //        PageSize = pageSize
+        //    };
+        //}
+
+
         public async Task<PagedResult<WorkItemResponseDto>> GetWorkItemsByEmployeePagedAsync(int userId, int page, int pageSize, string? status, string? dueDate, string? search, string? workType = null, string? priority = null)
         {
+            // Get projects this employee is a member of
             var query = _workItemRepo.Query()
-                .Include(w => w.Project)
-                    .ThenInclude(p => p.Client)
-                .Include(w => w.Module)
-                    .ThenInclude(m => m.Product)
-                .Include(w => w.AssignedTo)
-                .Include(w => w.CreatedBy)
-                .Where(w => w.AssignedToUserId == userId)
-                .AsQueryable();
+              .Include(w => w.Project)
+                  .ThenInclude(p => p.Client)
+              .Include(w => w.Module)
+                  .ThenInclude(m => m.Product)
+              .Include(w => w.AssignedTo)
+              .Include(w => w.CreatedBy)
+              .Where(w => w.AssignedToUserId == userId)
+              .AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(status) && status != "all")
             {
-                var statuses = status.Split(',').Select(s => s.Trim()).ToList();
+                var statuses = ResolveStatusFilter(status);
                 query = query.Where(w => statuses.Contains(w.Status));
             }
 
@@ -476,26 +531,43 @@ namespace TeamTrack.Services
             }
 
             if (!string.IsNullOrWhiteSpace(search))
-                query = query.Where(w => w.Title.Contains(search) || w.WorkNumber.Contains(search));
+            {
+                var s = search.ToLower();
+                query = query.Where(w => w.Title.ToLower().Contains(s) || w.WorkNumber.ToLower().Contains(s));
+            }
 
             var totalCount = await query.CountAsync();
-            var items = await query
-                .OrderBy(w => w.CreatedAt)
+
+            var allItems = await query.ToListAsync();
+            var items = allItems
+                .OrderBy(w => GetStatusOrder(w.Status))
+                .ThenByDescending(w => w.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
-                .ToListAsync();
+                .ToList();
 
             var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
             var parents = await _workItemRepo.Query().Where(p => parentIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id);
 
             return new PagedResult<WorkItemResponseDto>
             {
-                Items      = items.Select(w => MapWorkItemToDto(w, parents)).ToList(),
+                Items = items.Select(w => MapWorkItemToDto(w, parents)).ToList(),
                 TotalCount = totalCount,
-                Page       = page,
-                PageSize   = pageSize
+                Page = page,
+                PageSize = pageSize
             };
         }
+
+        private static int GetStatusOrder(string? status) => status switch
+        {
+            "pending" => 0,
+            "assigned" => 1,
+            "reopened" => 2,
+            "fixed" => 3,
+            "completed" => 4,
+            "future_release" => 5,
+            _ => 6
+        };
 
         public async Task<List<EmployeeDropdownDto>> GetAllEmployeesAsync()
         {
@@ -658,6 +730,31 @@ namespace TeamTrack.Services
 
             return normalized;
         }
+
+
+        private static readonly Dictionary<string, string> LabelToValueMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Open", "pending" },
+            { "Assigned", "assigned" },
+            { "Reopen", "reopened" },
+            { "In Progress", "in_progress" },
+            { "Fixed", "fixed" },
+            { "Resolved", "completed" },
+            { "Moved to future release", "future_release" },
+            { "Closed", "closed" }
+        };
+
+        public static List<string> ResolveStatusFilter(string status)
+        {
+            return status.Split(',').Select(s =>
+            {
+                var trimmed = s.Trim();
+                return LabelToValueMap.TryGetValue(trimmed, out var mapped) ? mapped : trimmed.ToLower();
+            }).ToList();
+        }
+
+
+
         private string MapWorkItemStatusToBugStatus(string wStatus)
         {
             return wStatus.ToLower() switch
@@ -924,8 +1021,11 @@ namespace TeamTrack.Services
                 FromUser  = a.FromUser?.Name,
                 ToUser    = a.ToUser?.Name,
                 FromStatus = a.FromStatus,
-                ToStatus  = a.ToStatus,
-                ByUser    = a.ByUser?.Name ?? "System",
+                ToStatus = a.ToStatus,
+                FieldName = a.FieldName,
+                OldValue = a.OldValue,
+                NewValue = a.NewValue,
+                ByUser = a.ByUser?.Name ?? "System",
                 Note      = a.Note,
                 Timestamp = a.Timestamp
             }).ToList();
