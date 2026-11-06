@@ -6,6 +6,7 @@ using Microsoft.IdentityModel.Tokens;
 using TeamTrack.Data;
 using TeamTrack.Repositories;
 using TeamTrack.Services;
+using TeamTrack.Workspace;
 //new
 using Xabe.FFmpeg;
 using Xabe.FFmpeg.Downloader;
@@ -62,6 +63,11 @@ builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICommentService, CommentService>();
 builder.Services.AddScoped<IJiraImportService, JiraImportService>();
 builder.Services.AddHostedService<AttachmentCleanupHostedService>();
+
+// Workspace features (campaign mails, leave, people, project documents, notifications).
+// Entirely off unless Features:Workspace is true (env var Features__Workspace=true).
+var workspaceEnabled = TeamTrack.Workspace.WorkspaceFeature.IsEnabled(builder.Configuration);
+if (workspaceEnabled) builder.Services.AddWorkspace(builder.Configuration);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -336,3 +342,5 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+if (workspaceEnabled) await app.InitializeWorkspaceAsync();
+
