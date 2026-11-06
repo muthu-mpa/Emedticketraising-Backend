@@ -141,12 +141,13 @@ namespace TeamTrack.Workspace.Services
 
         private async Task<Dictionary<int, (int Done, int Total)>> StatsAsync(List<int> projectIds)
         {
+            // WorkItem.ProjectId is int or int? depending on the branch; casting to int? works for both.
+            var ids = projectIds.Select(i => (int?)i).ToList();
             var items = await _app.WorkItems
-                .Where(w => w.ProjectId != null && projectIds.Contains(w.ProjectId.Value)
-                            && (w.WorkType == null || w.WorkType.ToLower() != "bug"))
-                .Select(w => new { ProjectId = w.ProjectId!.Value, w.Status })
+                .Where(w => ids.Contains(w.ProjectId) && (w.WorkType == null || w.WorkType.ToLower() != "bug"))
+                .Select(w => new { ProjectId = (int?)w.ProjectId, w.Status })
                 .ToListAsync();
-            return items.GroupBy(i => i.ProjectId)
+            return items.GroupBy(i => i.ProjectId!.Value)
                 .ToDictionary(g => g.Key, g => (g.Count(i => DoneStatuses.Contains(i.Status)), g.Count()));
         }
 
