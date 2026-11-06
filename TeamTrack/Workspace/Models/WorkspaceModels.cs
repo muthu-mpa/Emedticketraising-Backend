@@ -39,7 +39,26 @@ namespace TeamTrack.Workspace.Models
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? SentAt { get; set; }
 
+        // set for drafts created by an Excel import (nullable: older rows and hand-made drafts have none)
+        public int? ImportId { get; set; }
+        public int? SourceRow { get; set; }
+        public string? Segment { get; set; }
+        public string? Priority { get; set; }
+        public string? SendWave { get; set; }
+
+        public WsCampaignImport? Import { get; set; }
         public ICollection<WsCampaignHistory> History { get; set; } = [];
+    }
+
+    /// <summary>One uploaded Excel file that was turned into campaign drafts.</summary>
+    public class WsCampaignImport
+    {
+        public int Id { get; set; }
+        public string FileName { get; set; } = string.Empty;
+        public int ImportedBy { get; set; }
+        public int TotalRows { get; set; }
+        public int ImportedRows { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 
     public class WsCampaignHistory
@@ -97,6 +116,42 @@ namespace TeamTrack.Workspace.Models
         public string Message { get; set; } = string.Empty;
         public string? Link { get; set; }
         public bool IsRead { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    // ---------- Shared Excel sheets ----------
+
+    public class WsSharedSheet
+    {
+        public int Id { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public int OwnerId { get; set; }
+        /// <summary>Server-side path of the uploaded file; null for a blank sheet.</summary>
+        public string? OriginalFilePath { get; set; }
+        /// <summary>The sheet content as JSON (see SheetBook). Kept as text in the entity, jsonb in PostgreSQL.</summary>
+        public string Data { get; set; } = "{\"sheets\":[]}";
+        public int Version { get; set; } = 1;
+        public int? UpdatedBy { get; set; }
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    public class WsSharedSheetAccess
+    {
+        public int SheetId { get; set; }
+        public int UserId { get; set; }
+        public bool CanEdit { get; set; }
+    }
+
+    public class WsSharedSheetChange
+    {
+        public int Id { get; set; }
+        public int SheetId { get; set; }
+        public int UserId { get; set; }
+        /// <summary>The sheet version this save produced.</summary>
+        public int Version { get; set; }
+        /// <summary>JSON array of { sheet, row, col, value }.</summary>
+        public string ChangedCells { get; set; } = "[]";
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

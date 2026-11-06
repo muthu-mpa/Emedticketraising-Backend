@@ -41,6 +41,15 @@ namespace TeamTrack.Workspace.Dtos
         public DateTime UpdatedAt { get; set; }
         public DateTime? SentAt { get; set; }
 
+        // filled for drafts created by an Excel import
+        public int? ImportId { get; set; }
+        public int? SourceRow { get; set; }
+        public string? Segment { get; set; }
+        public string? Priority { get; set; }
+        public string? SendWave { get; set; }
+        /// <summary>Why a draft cannot be sent for approval yet (missing/invalid email, placeholders left). Empty when nothing blocks it.</summary>
+        public List<string> SubmitBlockers { get; set; } = [];
+
         /// <summary>changes_asked | needs_your_approval | ready_to_send | null</summary>
         public string? Badge { get; set; }
         public bool CanEdit { get; set; }
@@ -199,7 +208,7 @@ namespace TeamTrack.Workspace.Dtos
         public string Role { get; set; } = "";
         public string? ProfilePicture { get; set; }
         public List<string> Projects { get; set; } = [];
-        /// <summary>working | on_leave | away</summary>
+        /// <summary>Always "working" (the leave backend is not used by the people panel).</summary>
         public string TodayStatus { get; set; } = "working";
         public string TodayLabel { get; set; } = "Working";
     }
@@ -217,8 +226,9 @@ namespace TeamTrack.Workspace.Dtos
     {
         public string Email { get; set; } = "";
         public DateTime JoinedAt { get; set; }
+        /// <summary>No longer filled: the people panel has no leave information.</summary>
         public List<TimeOffDto> UpcomingTimeOff { get; set; } = [];
-        /// <summary>Only filled for a ProductManager or the person themselves.</summary>
+        /// <summary>No longer filled: the people panel has no leave information.</summary>
         public BalancesDto? Balances { get; set; }
     }
 

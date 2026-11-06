@@ -164,8 +164,9 @@ namespace TeamTrack.Tests
     public class PeopleHomeNotificationTests
     {
         [Fact]
-        public async Task People_list_shows_today_status_and_project_tags()
+        public async Task People_list_always_reports_working_even_for_someone_on_approved_leave_and_shows_project_tags()
         {
+            // the leave backend stays in place but is not part of the people panel any more
             var k = new Kit();
             await k.AddProjectAsync("Alpha", k.Asha.Id);
             var leave = Ok(await k.TimeOff.RequestLeaveAsync(k.Asha, new LeaveRequestInput
@@ -174,35 +175,25 @@ namespace TeamTrack.Tests
 
             var people = Ok(await k.People.ListAsync(k.Ben));
             Assert.Equal(5, people.TotalCount);
-            var asha = people.Items.Single(p => p.Name == "Asha");
-            Assert.Equal("on_leave", asha.TodayStatus);
-            Assert.Equal("On leave", asha.TodayLabel);
-            Assert.Equal(["Alpha"], asha.Projects);
-            Assert.Equal("Working", people.Items.Single(p => p.Name == "Ben").TodayLabel);
+            Assert.All(people.Items, p => { Assert.Equal("working", p.TodayStatus); Assert.Equal("Working", p.TodayLabel); });
+            Assert.Equal(["Alpha"], people.Items.Single(p => p.Name == "Asha").Projects);
         }
 
         [Fact]
-        public async Task Profile_shows_balances_only_to_a_pm_or_the_person_and_hides_reasons_from_others()
+        public async Task Profile_has_no_leave_data_for_anyone()
         {
             var k = new Kit();
-            var r = Ok(await k.TimeOff.RequestLeaveAsync(k.Asha, new LeaveRequestInput
+            Ok(await k.TimeOff.RequestLeaveAsync(k.Asha, new LeaveRequestInput
             { LeaveType = "sick", FromDate = new(2026, 12, 1), ToDate = new(2026, 12, 2), Reason = "surgery" }));
 
-            var asSelf = Ok(await k.People.ProfileAsync(k.Asha, k.Asha.Id));
-            Assert.NotNull(asSelf.Balances);
-            Assert.Equal("surgery", Assert.Single(asSelf.UpcomingTimeOff).Reason);
-            Assert.Equal("asha@example.com", asSelf.Email);
-
-            var asPm = Ok(await k.People.ProfileAsync(k.Priya, k.Asha.Id));
-            Assert.NotNull(asPm.Balances);
-            Assert.Equal("surgery", asPm.UpcomingTimeOff[0].Reason);
-
-            var asPeer = Ok(await k.People.ProfileAsync(k.Ben, k.Asha.Id));
-            Assert.Null(asPeer.Balances);
-            Assert.Equal("", asPeer.UpcomingTimeOff[0].Reason);
-            Assert.Equal("pending", asPeer.UpcomingTimeOff[0].Status);
-            Assert.Equal(r.Id, asPeer.UpcomingTimeOff[0].Id);
-
+            foreach (var viewer in new[] { k.Asha, k.Priya, k.Ben })
+            {
+                var profile = Ok(await k.People.ProfileAsync(viewer, k.Asha.Id));
+                Assert.Equal("asha@example.com", profile.Email);
+                Assert.Equal("Working", profile.TodayLabel);
+                Assert.Null(profile.Balances);
+                Assert.Empty(profile.UpcomingTimeOff);
+            }
             Fails(await k.People.ProfileAsync(k.Ben, 999), 404);
         }
 
@@ -424,7 +415,7 @@ namespace TeamTrack.Tests
             var controllers = typeof(WorkspaceFeature).Assembly.GetTypes()
                 .Where(t => typeof(ControllerBase).IsAssignableFrom(t) && t.Namespace == "TeamTrack.Workspace.Controllers" && !t.IsAbstract)
                 .ToList();
-            Assert.Equal(6, controllers.Count);
+            Assert.Equal(7, controllers.Count);
             foreach (var c in controllers)
             {
                 Assert.NotNull(Attribute.GetCustomAttribute(c, typeof(WorkspaceEnabledAttribute), inherit: true));

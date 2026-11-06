@@ -34,11 +34,16 @@ namespace TeamTrack.Workspace.Controllers
     public class CampaignsController : WorkspaceControllerBase
     {
         private readonly ICampaignService _campaigns;
-        public CampaignsController(ICampaignService campaigns) => _campaigns = campaigns;
+        private readonly ICampaignImportService _imports;
+        public CampaignsController(ICampaignService campaigns, ICampaignImportService imports)
+        {
+            _campaigns = campaigns;
+            _imports = imports;
+        }
 
         [HttpGet]
-        public async Task<IActionResult> List([FromQuery] string? status, [FromQuery] bool onlyMine = false, [FromQuery] string? search = null)
-            => Respond(await _campaigns.ListAsync(Me, status, onlyMine, search));
+        public async Task<IActionResult> List([FromQuery] string? status, [FromQuery] bool onlyMine = false, [FromQuery] string? search = null, [FromQuery] int? importId = null)
+            => Respond(await _campaigns.ListAsync(Me, status, onlyMine, search, importId));
 
         [HttpGet("templates")]
         public IActionResult Templates()
@@ -67,6 +72,46 @@ namespace TeamTrack.Workspace.Controllers
 
         [HttpPost("{id:int}/send")]
         public async Task<IActionResult> Send(int id, [FromBody] SendCampaignInput input) => Respond(await _campaigns.SendAsync(Me, id, input.Confirm));
+
+        // ---------- bulk ----------
+
+        /// <summary>Send many drafts for approval. Each one follows the same rules as the single action; the result lists success or error per id.</summary>
+        [HttpPost("bulk/submit")]
+        public async Task<IActionResult> BulkSubmit([FromBody] BulkIdsInput input) => Respond(await _campaigns.BulkSubmitAsync(Me, input.Ids));
+
+        /// <summary>Approve many pending mails (Product Manager). Per-item success or error, as for the single action.</summary>
+        [HttpPost("bulk/approve")]
+        public async Task<IActionResult> BulkApprove([FromBody] BulkIdsInput input) => Respond(await _campaigns.BulkApproveAsync(Me, input.Ids));
+
+        // ---------- Excel import ----------
+
+        /// <summary>Parse an .xlsx (max 5 MB, 500 rows) and return the rows with ERROR / WARNING flags. Nothing is saved.</summary>
+        [HttpPost("import/preview")]
+        [RequestSizeLimit(CampaignImportService.MaxFileBytes + 1024 * 1024)]
+        public async Task<IActionResult> ImportPreview(IFormFile? file) => Respond(await _imports.PreviewAsync(Me, file));
+
+        /// <summary>Create drafts for the selected rows, from the previewToken or by sending the file again.</summary>
+        [HttpPost("import/commit")]
+        [Consumes("multipart/form-data")]
+        [RequestSizeLimit(CampaignImportService.MaxFileBytes + 1024 * 1024)]
+        public async Task<IActionResult> ImportCommit([FromForm] ImportCommitForm form)
+            => Respond(await _imports.CommitAsync(Me, form.PreviewToken, form.File, form.SelectedRows));
+
+        /// <summary>The same commit as JSON: { previewToken, selectedRows }. Hidden from Swagger, which shows the form version of this URL.</summary>
+        [HttpPost("import/commit")]
+        [Consumes("application/json")]
+        [ApiExplorerSettings(IgnoreApi = true)]
+        public async Task<IActionResult> ImportCommitJson([FromBody] ImportCommitJson body)
+            => Respond(await _imports.CommitAsync(Me, body.PreviewToken, null, body.SelectedRows));
+
+        /// <summary>Download the simple template (Campaign name | Client | Contact person | Client email | Subject | Message).</summary>
+        [HttpGet("import/template")]
+        public IActionResult ImportTemplate()
+            => File(_imports.Template(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "campaign-import-template.xlsx");
+
+        /// <summary>Import batches, newest first: file name, who, when, counts. Use a batch id as ?importId= on the campaign list.</summary>
+        [HttpGet("imports")]
+        public async Task<IActionResult> Imports([FromQuery] int take = 50) => Respond(await _imports.ListBatchesAsync(Me, take));
     }
 
     [Route("api/workspace/timeoff")]

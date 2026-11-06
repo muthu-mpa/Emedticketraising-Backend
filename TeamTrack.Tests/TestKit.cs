@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -47,6 +48,26 @@ namespace TeamTrack.Tests
         }
     }
 
+    public sealed class FakeSheetFiles : ISheetFileStore
+    {
+        public Dictionary<string, byte[]> Stored { get; } = [];
+        public List<string> Deleted { get; } = [];
+
+        public Task<string> SaveAsync(byte[] bytes)
+        {
+            var path = $"/uploads/sheets/{Guid.NewGuid():N}.xlsx";
+            Stored[path] = bytes;
+            return Task.FromResult(path);
+        }
+
+        public void Delete(string? path)
+        {
+            if (path == null) return;
+            Stored.Remove(path);
+            Deleted.Add(path);
+        }
+    }
+
     public sealed class CapturingLogger : ILogger
     {
         public List<(LogLevel Level, string Message)> Entries { get; } = [];
@@ -73,6 +94,8 @@ namespace TeamTrack.Tests
         public FakeClock Clock { get; } = new();
         public FakeEmail Email { get; } = new();
         public FakeFiles Files { get; } = new();
+        public FakeSheetFiles SheetFiles { get; } = new();
+        public IMemoryCache Cache { get; } = new MemoryCache(new MemoryCacheOptions());
 
         public INotificationService Notifications { get; }
         public ICampaignService Campaigns { get; }
@@ -80,6 +103,8 @@ namespace TeamTrack.Tests
         public IWorkspaceProjectService Projects { get; }
         public IPeopleService People { get; }
         public IWorkspaceHomeService Home { get; }
+        public ICampaignImportService Imports { get; }
+        public ISharedSheetService Sheets { get; }
 
         public Kit(string? companyAddress = "12 Test Street, Chennai")
         {
@@ -104,8 +129,10 @@ namespace TeamTrack.Tests
             TimeOff = new TimeOffService(Ws, App, Notifications, Clock);
             Campaigns = new CampaignService(Ws, App, Notifications, Email, _config, NullLogger<CampaignService>.Instance);
             Projects = new WorkspaceProjectService(Ws, App, Files);
-            People = new PeopleService(App, TimeOff);
+            People = new PeopleService(App);
             Home = new WorkspaceHomeService(Ws, App, TimeOff, Projects, Clock);
+            Imports = new CampaignImportService(Ws, App, Cache);
+            Sheets = new SharedSheetService(Ws, App, Notifications, SheetFiles, Imports, NullLogger<SharedSheetService>.Instance);
         }
 
         public WorkspaceDbContext NewWorkspaceContext()

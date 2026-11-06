@@ -11,17 +11,16 @@ namespace TeamTrack.Workspace.Services
         Task<WsResult<PersonProfileDto>> ProfileAsync(CurrentUser user, int personId);
     }
 
-    /// <summary>Read-only directory over the existing users table. There is no team/location column, so none is exposed.</summary>
+    /// <summary>
+    /// Read-only directory over the existing users table. There is no team/location column, so none is exposed.
+    /// The leave/permission backend is kept but unused by the frontend, so everyone is reported as "Working" and the
+    /// profile carries no time-off data.
+    /// </summary>
     public class PeopleService : IPeopleService
     {
         private readonly AppDbContext _app;
-        private readonly ITimeOffService _timeOff;
 
-        public PeopleService(AppDbContext app, ITimeOffService timeOff)
-        {
-            _app = app;
-            _timeOff = timeOff;
-        }
+        public PeopleService(AppDbContext app) => _app = app;
 
         private const string EmployeeRole = "Employee";
 
@@ -49,9 +48,8 @@ namespace TeamTrack.Workspace.Services
             if (!string.IsNullOrWhiteSpace(role)) users = users.Where(u => Is(u, role)).ToList();
 
             var projectsByUser = await ProjectNamesAsync(users.Select(u => u.Id).ToList());
-            var away = (await _timeOff.AwayTodayAsync()).ToDictionary(a => a.UserId);
 
-            var items = users.Select(u => Fill(new PersonDto(), u, projectsByUser, away)).ToList();
+            var items = users.Select(u => Fill(new PersonDto(), u, projectsByUser)).ToList();
             return WsResult<PeopleListDto>.Ok(new PeopleListDto { TotalCount = counts["all"], RoleCounts = counts, Items = items });
         }
 
@@ -68,12 +66,9 @@ namespace TeamTrack.Workspace.Services
             if (person == null) return WsResult<PersonProfileDto>.Fail(404, "Person not found.");
 
             var projectsByUser = await ProjectNamesAsync([personId]);
-            var away = (await _timeOff.AwayTodayAsync()).ToDictionary(a => a.UserId);
-            var profile = Fill(new PersonProfileDto(), person, projectsByUser, away);
+            var profile = Fill(new PersonProfileDto(), person, projectsByUser);
             profile.Email = person.Email;
             profile.JoinedAt = person.CreatedAt;
-            profile.UpcomingTimeOff = await _timeOff.UpcomingAsync(user, personId);
-            if (user.IsPM || user.Id == personId) profile.Balances = await _timeOff.BalancesAsync(personId);
             return WsResult<PersonProfileDto>.Ok(profile);
         }
 
@@ -87,15 +82,12 @@ namespace TeamTrack.Workspace.Services
             return map;
         }
 
-        private static T Fill<T>(T dto, TeamTrack.Models.User u, Dictionary<int, List<string>> projects, Dictionary<int, AwayDto> away) where T : PersonDto
+        private static T Fill<T>(T dto, TeamTrack.Models.User u, Dictionary<int, List<string>> projects) where T : PersonDto
         {
             dto.Id = u.Id; dto.Name = u.Name; dto.Role = u.UserType; dto.ProfilePicture = u.ProfilePicture;
             dto.Projects = projects.GetValueOrDefault(u.Id) ?? [];
-            if (away.TryGetValue(u.Id, out var a))
-            {
-                dto.TodayStatus = a.Kind == "leave" ? "on_leave" : "away";
-                dto.TodayLabel = a.Label;
-            }
+            dto.TodayStatus = "working";
+            dto.TodayLabel = "Working";
             return dto;
         }
     }

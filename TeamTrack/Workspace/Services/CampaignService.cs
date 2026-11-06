@@ -11,7 +11,7 @@ namespace TeamTrack.Workspace.Services
 {
     public interface ICampaignService
     {
-        Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search);
+        Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search, int? importId = null);
         Task<WsResult<CampaignDetailDto>> GetAsync(CurrentUser user, int id);
         Task<WsResult<CampaignDetailDto>> CreateAsync(CurrentUser user, CampaignInput input);
         Task<WsResult<CampaignDetailDto>> UpdateAsync(CurrentUser user, int id, CampaignInput input);
@@ -20,6 +20,9 @@ namespace TeamTrack.Workspace.Services
         Task<WsResult<CampaignDetailDto>> AskChangesAsync(CurrentUser user, int id, string? note);
         Task<WsResult<CampaignDetailDto>> TakeBackAsync(CurrentUser user, int id);
         Task<WsResult<CampaignDetailDto>> SendAsync(CurrentUser user, int id, bool confirm);
+        /// <summary>Submit / approve each id on its own, with the same rules as the single action. One result per id.</summary>
+        Task<WsResult<BulkResultDto>> BulkSubmitAsync(CurrentUser user, IReadOnlyList<int>? ids);
+        Task<WsResult<BulkResultDto>> BulkApproveAsync(CurrentUser user, IReadOnlyList<int>? ids);
         IReadOnlyList<CampaignTemplateDto> Templates();
     }
 
@@ -48,10 +51,11 @@ namespace TeamTrack.Workspace.Services
 
         // ---------- queries ----------
 
-        public async Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search)
+        public async Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search, int? importId = null)
         {
             var query = _db.Campaigns.AsQueryable();
             if (onlyMine) query = query.Where(c => c.CreatedByUserId == user.Id);
+            if (importId != null) query = query.Where(c => c.ImportId == importId);
 
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -140,6 +144,8 @@ namespace TeamTrack.Workspace.Services
                 ClientEmail = c.ClientEmail, Subject = c.Subject, Body = c.Body,
             }, requireAll: true);
             if (error != null) return WsResult<CampaignDetailDto>.Fail(400, error);
+            var blockers = SubmitBlockers(c);
+            if (blockers.Count > 0) return WsResult<CampaignDetailDto>.Fail(400, string.Join(" ", blockers));
 
             c.Status = CampaignStatus.Pending;
             c.ManagerNote = null;
@@ -200,6 +206,50 @@ namespace TeamTrack.Workspace.Services
             await _db.SaveChangesAsync();
             return WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user), "Taken back to draft.");
         }
+
+        // ---------- bulk ----------
+
+        public const int MaxBulkItems = 500;
+
+        public Task<WsResult<BulkResultDto>> BulkSubmitAsync(CurrentUser user, IReadOnlyList<int>? ids)
+            => BulkAsync(ids, id => SubmitAsync(user, id));
+
+        public Task<WsResult<BulkResultDto>> BulkApproveAsync(CurrentUser user, IReadOnlyList<int>? ids)
+            => BulkAsync(ids, id => ApproveAsync(user, id));
+
+        private async Task<WsResult<BulkResultDto>> BulkAsync(IReadOnlyList<int>? ids, Func<int, Task<WsResult<CampaignDetailDto>>> action)
+        {
+            if (ids == null || ids.Count == 0) return WsResult<BulkResultDto>.Fail(400, "Select at least one campaign.");
+            var distinct = ids.Distinct().ToList();
+            if (distinct.Count > MaxBulkItems) return WsResult<BulkResultDto>.Fail(400, $"At most {MaxBulkItems} campaigns at a time.");
+
+            var result = new BulkResultDto();
+            foreach (var id in distinct)
+            {
+                BulkItemResultDto item;
+                try
+                {
+                    var r = await action(id);
+                    item = new BulkItemResultDto { Id = id, Success = r.Success, Status = r.Status, Message = r.Message, CampaignStatus = r.Data?.Status };
+                }
+                catch (Exception ex)
+                {
+                    // one bad item must not stop the rest; drop whatever the failed save left tracked
+                    _logger.LogError(ex, "Bulk action failed for campaign {CampaignId}.", id);
+                    _db.ChangeTracker.Clear();
+                    item = new BulkItemResultDto { Id = id, Success = false, Status = 500, Message = "Unexpected error. Nothing was changed for this item." };
+                }
+                if (!item.Success && item.CampaignStatus == null)
+                    item.CampaignStatus = await _db.Campaigns.Where(c => c.Id == id).Select(c => c.Status).FirstOrDefaultAsync();
+                if (item.Success) result.Succeeded++; else result.Failed++;
+                result.Items.Add(item);
+            }
+            return WsResult<BulkResultDto>.Ok(result, $"{result.Succeeded} done, {result.Failed} failed.");
+        }
+
+        /// <summary>The ERROR rules: a missing or invalid email, or placeholders left in the text. Enforced on every submit.</summary>
+        private static List<string> SubmitBlockers(WsCampaign c)
+            => CampaignRules.SubmitBlockers(c.ClientEmail, c.Title, c.ClientName, c.ContactName, c.Subject, c.Body);
 
         public async Task<WsResult<CampaignDetailDto>> SendAsync(CurrentUser user, int id, bool confirm)
         {
@@ -365,6 +415,8 @@ namespace TeamTrack.Workspace.Services
             d.Id = c.Id; d.Title = c.Title; d.ClientName = c.ClientName; d.ContactName = c.ContactName;
             d.ClientEmail = c.ClientEmail; d.Subject = c.Subject; d.Body = c.Body; d.Status = c.Status;
             d.ManagerNote = c.ManagerNote; d.CreatedByUserId = c.CreatedByUserId;
+            d.ImportId = c.ImportId; d.SourceRow = c.SourceRow; d.Segment = c.Segment; d.Priority = c.Priority; d.SendWave = c.SendWave;
+            d.SubmitBlockers = c.Status == CampaignStatus.Draft ? SubmitBlockers(c) : [];
             d.CreatedByName = names.TryGetValue(c.CreatedByUserId, out var n) ? n.Name : "";
             d.CreatedAt = c.CreatedAt; d.UpdatedAt = c.UpdatedAt; d.SentAt = c.SentAt;
             d.CanEdit = isCreator && c.Status == CampaignStatus.Draft;
