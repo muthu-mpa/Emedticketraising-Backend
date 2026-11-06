@@ -107,13 +107,18 @@ namespace TeamTrack.Workspace.Services
                 select new { s.Id, s.Title, s.OwnerId, s.Version, s.UpdatedBy, s.UpdatedAt, s.CreatedAt, SharedEdit = a != null && a.CanEdit }
             ).ToListAsync();
 
-            var names = await NamesAsync(rows.Select(r => r.OwnerId).Concat(rows.Where(r => r.UpdatedBy != null).Select(r => r.UpdatedBy!.Value)));
+            var sheetIds = rows.Select(r => r.Id).ToList();
+            var shared = await _db.SharedSheetAccess.Where(a => sheetIds.Contains(a.SheetId)).ToListAsync();
+            var names = await NamesAsync(rows.Select(r => r.OwnerId)
+                .Concat(rows.Where(r => r.UpdatedBy != null).Select(r => r.UpdatedBy!.Value)).Concat(shared.Select(a => a.UserId)));
             return WsResult<List<SheetListItemDto>>.Ok(rows.Select(r => new SheetListItemDto
             {
                 Id = r.Id, Title = r.Title, OwnerId = r.OwnerId, OwnerName = names.GetValueOrDefault(r.OwnerId) ?? "",
                 IsOwner = r.OwnerId == user.Id, CanEdit = r.OwnerId == user.Id || r.SharedEdit,
                 Version = r.Version, UpdatedBy = r.UpdatedBy, UpdatedByName = r.UpdatedBy == null ? null : names.GetValueOrDefault(r.UpdatedBy.Value),
                 UpdatedAt = r.UpdatedAt, CreatedAt = r.CreatedAt,
+                SharedWith = shared.Where(a => a.SheetId == r.Id).OrderBy(a => names.GetValueOrDefault(a.UserId))
+                    .Select(a => new SheetAccessDto { UserId = a.UserId, UserName = names.GetValueOrDefault(a.UserId) ?? "", CanEdit = a.CanEdit }).ToList(),
             }).ToList());
         }
 

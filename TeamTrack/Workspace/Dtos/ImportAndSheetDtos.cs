@@ -140,6 +140,8 @@ namespace TeamTrack.Workspace.Dtos
         public string? UpdatedByName { get; set; }
         public DateTime UpdatedAt { get; set; }
         public DateTime CreatedAt { get; set; }
+        /// <summary>Who the sheet is shared with (the list endpoint fills it for every row; the detail endpoint only for the owner).</summary>
+        public List<SheetAccessDto>? SharedWith { get; set; }
     }
 
     public class SheetAccessDto
@@ -154,8 +156,6 @@ namespace TeamTrack.Workspace.Dtos
         public SheetBook Data { get; set; } = new();
         /// <summary>True when the sheet came from an uploaded file: colours, merged cells and other formatting are not kept.</summary>
         public bool FormattingLost { get; set; }
-        /// <summary>Who the sheet is shared with. Only filled for the owner.</summary>
-        public List<SheetAccessDto>? SharedWith { get; set; }
     }
 
     public class SheetVersionDto

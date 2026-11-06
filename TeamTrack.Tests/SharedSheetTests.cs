@@ -105,6 +105,8 @@ namespace TeamTrack.Tests
             Assert.True(forBen.Single(s => s.Id == shared.Id).CanEdit);
             Assert.False(forBen.Single(s => s.Id == shared.Id).IsOwner);
             Assert.False(Ok(await k.Sheets.ListAsync(k.MeenaAsEmployee)).Single().CanEdit); // view only
+            var withPeople = Ok(await k.Sheets.ListAsync(k.Ben)).Single(s => s.Id == shared.Id).SharedWith!;
+            Assert.Equal(["Ben", "Meena"], withPeople.Select(a => a.UserName)); // the list carries who it is shared with, for the avatars
             Assert.Empty(Ok(await k.Sheets.ListAsync(k.Priya))); // a PM can open any sheet by id but it is not listed unless mine or shared
             Assert.DoesNotContain(Ok(await k.Sheets.ListAsync(k.Asha)), s => s.Id == bens.Id);
             Assert.Contains(Ok(await k.Sheets.ListAsync(k.Asha)), s => s.Id == lonely.Id);
