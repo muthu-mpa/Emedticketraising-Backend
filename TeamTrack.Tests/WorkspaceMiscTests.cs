@@ -410,6 +410,14 @@ namespace TeamTrack.Tests
         }
 
         [Fact]
+        public void The_schema_script_has_no_braces_because_ExecuteSqlRaw_formats_it()
+        {
+            Assert.DoesNotContain('{', WorkspaceSchemaInitializer.Sql);
+            Assert.DoesNotContain('}', WorkspaceSchemaInitializer.Sql);
+            _ = string.Format(WorkspaceSchemaInitializer.Sql); // what ExecuteSqlRaw does first; it must not throw
+        }
+
+        [Fact]
         public void Every_workspace_controller_is_gated_authorised_and_under_api_workspace()
         {
             var controllers = typeof(WorkspaceFeature).Assembly.GetTypes()
