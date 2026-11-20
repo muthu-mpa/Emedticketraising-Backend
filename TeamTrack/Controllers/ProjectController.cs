@@ -315,22 +315,39 @@ namespace TeamTrack.Controllers
                 return BadRequest(ApiResponse<string>.FailureResponse("Status is required"));
 
             var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            if (userRole != "ProductManager")
+            {
+                var wi = await workItemRepo.GetAsync(w => w.Id == workItemId);
+                if (wi != null)
+                {
+                    var dbCtx = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                    var isMember = await dbCtx.Projects
+                        .Where(p => p.Id == wi.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+                    if (!isMember)
+                        return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to change status"));
+                }
+            }
+
+            // Auto-save custom FixedBuild to software_builds table if not already present
 
             // Auto-save custom FixedBuild to software_builds table if not already present
             if (!string.IsNullOrWhiteSpace(request.FixedBuild))
             {
                 var workItem = await workItemRepo.GetAsync(w => w.Id == workItemId);
-                if (workItem != null)
+                if (workItem != null && workItem.ProjectId.HasValue)
                 {
                     var alreadyExists = await buildRepo.Query()
-                        .AnyAsync(b => b.ProjectId == workItem.ProjectId &&
+                        .AnyAsync(b => b.ProjectId == workItem.ProjectId.Value &&
                                        b.BuildNumber.ToLower() == request.FixedBuild.Trim().ToLower());
                     if (!alreadyExists)
                     {
                         var newBuild = new SoftwareBuild
                         {
                             BuildNumber = request.FixedBuild.Trim(),
-                            ProjectId = workItem.ProjectId,
+                            ProjectId = workItem.ProjectId.Value,
                             IsActive = true,
                             CreatedAt = DateTime.UtcNow
                         };
@@ -352,6 +369,22 @@ namespace TeamTrack.Controllers
         public async Task<IActionResult> ReassignWorkItem(int workItemId, [FromBody] ReassignWorkItemRequestDto request)
         {
             var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            if (userRole != "ProductManager")
+            {
+                var dbCtx = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var workItem = await dbCtx.WorkItems.FindAsync(workItemId);
+                if (workItem != null)
+                {
+                    var isMember = await dbCtx.Projects
+                        .Where(p => p.Id == workItem.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+                    if (!isMember)
+                        return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to reassign tasks"));
+                }
+            }
+
             var result = await _projectService.ReassignWorkItemAsync(workItemId, request, userId);
             if (result == null)
                 return NotFound(ApiResponse<string>.FailureResponse("WorkItem not found"));
@@ -371,6 +404,23 @@ namespace TeamTrack.Controllers
         [Authorize(Roles = "Employee,ProductManager")]
         public async Task<IActionResult> UpdateWorkItemDueDate(int workItemId, [FromBody] UpdateWorkItemDueDateRequestDto request)
         {
+            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            if (userRole != "ProductManager")
+            {
+                var dbCtx = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var workItem = await dbCtx.WorkItems.FindAsync(workItemId);
+                if (workItem != null)
+                {
+                    var isMember = await dbCtx.Projects
+                        .Where(p => p.Id == workItem.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+                    if (!isMember)
+                        return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to update due date"));
+                }
+            }
+
             var result = await _projectService.UpdateWorkItemDueDateAsync(workItemId, request);
             if (result == null)
                 return NotFound(ApiResponse<string>.FailureResponse("WorkItem not found"));
@@ -382,20 +432,29 @@ namespace TeamTrack.Controllers
         [Authorize(Roles = "Employee,ProductManager")]
         public async Task<IActionResult> UpdateWorkItem(int workItemId, [FromBody] CreateWorkItemRequestDto request, [FromServices] IRepository<WorkItem> workItemRepo)
         {
-            if (string.IsNullOrEmpty(request.Title))
+            var workItem = await workItemRepo.GetAsync(w => w.Id == workItemId);
+            if (workItem == null)
+                return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
+
+            if (string.IsNullOrEmpty(request.Title) && string.IsNullOrEmpty(workItem.Title))
                 return BadRequest(ApiResponse<string>.FailureResponse("Title is required"));
 
             var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
             var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
 
-            var workItem = await workItemRepo.GetAsync(w => w.Id == workItemId);
-            if (workItem == null)
-                return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
+            if (userRole != "ProductManager")
+            {
+                var dbContext = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var isMember = (workItem.AssignedToUserId == userId || workItem.CreatedByUserId == userId) ||
+                    await dbContext.Projects
+                        .Where(p => p.Id == workItem.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
 
-            if (userRole != "ProductManager" && workItem.CreatedByUserId != userId)
-                return StatusCode(403, ApiResponse<string>.FailureResponse("Only the creator of this task can edit it"));
+                if (!isMember)
+                    return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to edit tasks"));
+            }
 
-            // ?? Capture old values for audit trail ??
+            // Capture old values for audit trail
             var oldValues = new Dictionary<string, string?>
             {
                 { "Title", workItem.Title },
@@ -418,30 +477,70 @@ namespace TeamTrack.Controllers
                 { "RaisedBillNumber", workItem.RaisedBillNumber }
             };
 
+            if (!string.IsNullOrWhiteSpace(request.Title))
+                workItem.Title = request.Title.Trim();
 
-            workItem.Title = request.Title.Trim();
-            workItem.Description = request.Description?.Trim();
+            if (request.Description != null)
+                workItem.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+
             if (!string.IsNullOrWhiteSpace(request.Status))
             {
                 var isBugItem = workItem.WorkType.Equals("Bug", StringComparison.OrdinalIgnoreCase);
                 workItem.Status = ProjectService.ResolveWorkItemStatus(request.Status, isBugItem);
             }
-            workItem.Priority = request.Priority;
-            workItem.ModuleId = request.ModuleId;
-            workItem.StartDate = request.StartDate;
-            workItem.DueDate = request.DueDate;
-            workItem.Labels = request.Labels;
-            workItem.Team = request.Team;
-            workItem.ParentId = request.ParentId;
-            workItem.EpicName = request.EpicName;
-            workItem.EpicColor = request.EpicColor;
-            workItem.RaisedBuild = request.RaisedBuild;
-            workItem.FixedBuild = request.FixedBuild;
-            workItem.AssignedToUserId = request.AssignedToUserId;
-            workItem.AttachmentUrls = request.AttachmentUrls ?? workItem.AttachmentUrls;
-            workItem.FixedBillNumber = request.FixedBillNumber ?? workItem.FixedBillNumber;
-            workItem.RaisedBillNumber = request.RaisedBillNumber ?? workItem.RaisedBillNumber;
-            if (request.DeveloperBillLock) workItem.DeveloperBillLock = request.DeveloperBillLock;
+
+            if (!string.IsNullOrWhiteSpace(request.Priority))
+                workItem.Priority = request.Priority;
+
+            if (request.ModuleId.HasValue)
+                workItem.ModuleId = request.ModuleId.Value > 0 ? request.ModuleId : null;
+
+            if (request.ClientModuleId.HasValue)
+                workItem.ClientModuleId = request.ClientModuleId.Value > 0 ? request.ClientModuleId : null;
+
+            if (request.StartDate.HasValue)
+                workItem.StartDate = request.StartDate;
+
+            if (request.DueDate.HasValue)
+                workItem.DueDate = request.DueDate;
+
+            if (request.Labels != null)
+                workItem.Labels = request.Labels;
+
+            if (request.Team != null)
+                workItem.Team = request.Team;
+
+            if (request.ParentId.HasValue)
+                workItem.ParentId = request.ParentId.Value > 0 ? request.ParentId : null;
+
+            if (request.EpicName != null)
+                workItem.EpicName = request.EpicName;
+
+            if (request.EpicColor != null)
+                workItem.EpicColor = request.EpicColor;
+
+            if (request.RaisedBuild != null)
+                workItem.RaisedBuild = request.RaisedBuild;
+
+            if (request.FixedBuild != null)
+                workItem.FixedBuild = request.FixedBuild;
+
+            // Handle unassign or assign: null or <= 0 unassigns, > 0 assigns
+            if (request.AssignedToUserId.HasValue)
+                workItem.AssignedToUserId = request.AssignedToUserId.Value > 0 ? request.AssignedToUserId : null;
+
+            if (request.AttachmentUrls != null)
+                workItem.AttachmentUrls = string.IsNullOrWhiteSpace(request.AttachmentUrls) ? null : request.AttachmentUrls.Trim();
+
+            if (request.FixedBillNumber != null)
+                workItem.FixedBillNumber = request.FixedBillNumber;
+
+            if (request.RaisedBillNumber != null)
+                workItem.RaisedBillNumber = request.RaisedBillNumber;
+
+            if (request.DeveloperBillLock)
+                workItem.DeveloperBillLock = request.DeveloperBillLock;
+
             workItem.UpdatedAt = DateTime.UtcNow;
 
             await workItemRepo.SaveAsync();
@@ -530,6 +629,186 @@ namespace TeamTrack.Controllers
             return Ok(ApiResponse<WorkItemResponseDto>.SuccessResponse(result!, "Task updated successfully"));
         }
 
+        [HttpPut("workitems/{workItemId}/description")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> UpdateWorkItemDescription(
+            int workItemId,
+            [FromBody] UpdateWorkItemDescriptionRequestDto request,
+            [FromServices] IRepository<WorkItem> workItemRepo,
+            [FromServices] IRepository<WorkItemActivityLog> activityRepo)
+        {
+            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            var workItem = await workItemRepo.GetAsync(w => w.Id == workItemId);
+            if (workItem == null)
+                return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
+
+            if (userRole != "ProductManager")
+            {
+                var dbContext = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var isMember = (workItem.AssignedToUserId == userId || workItem.CreatedByUserId == userId) ||
+                    await dbContext.Projects
+                        .Where(p => p.Id == workItem.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+
+                if (!isMember)
+                    return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to edit tasks"));
+            }
+
+            var oldDesc = workItem.Description;
+            var newDesc = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+
+            workItem.Description = newDesc;
+            workItem.UpdatedAt = DateTime.UtcNow;
+            await workItemRepo.SaveAsync();
+
+            if ((oldDesc ?? "") != (newDesc ?? ""))
+            {
+                await activityRepo.AddAsync(new WorkItemActivityLog
+                {
+                    WorkItemId = workItem.Id,
+                    Action = "FieldChanged",
+                    FieldName = "Description",
+                    OldValue = oldDesc ?? "",
+                    NewValue = newDesc ?? "",
+                    ByUserId = userId,
+                    Timestamp = DateTime.UtcNow
+                });
+                await activityRepo.SaveAsync();
+            }
+
+            // Sync with bug if linked
+            var bugRepo = HttpContext.RequestServices.GetRequiredService<IRepository<Bug>>();
+            var bug = await bugRepo.GetAsync(b => b.WorkItemId == workItemId);
+            if (bug != null)
+            {
+                bug.Description = newDesc;
+                bug.UpdatedAt = DateTime.UtcNow;
+                await bugRepo.SaveAsync();
+            }
+
+            var result = await _projectService.GetWorkItemByIdAsync(workItemId);
+            return Ok(ApiResponse<WorkItemResponseDto>.SuccessResponse(result!, "Description updated successfully"));
+        }
+
+        [HttpPost("workitems/{workItemId}/attachments")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> AddWorkItemAttachment(
+            int workItemId,
+            IFormFile file,
+            [FromServices] IRepository<WorkItem> workItemRepo,
+            [FromServices] IRepository<WorkItemActivityLog> activityRepo)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest(ApiResponse<string>.FailureResponse("No file selected"));
+
+            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            var workItem = await workItemRepo.GetAsync(w => w.Id == workItemId);
+            if (workItem == null)
+                return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
+
+            if (userRole != "ProductManager")
+            {
+                var dbContext = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var isMember = (workItem.AssignedToUserId == userId || workItem.CreatedByUserId == userId) ||
+                    await dbContext.Projects
+                        .Where(p => p.Id == workItem.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+
+                if (!isMember)
+                    return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to attach files"));
+            }
+
+            var fileUrl = await _fileService.UploadScreenshotAsync(file);
+
+            var existingUrls = string.IsNullOrEmpty(workItem.AttachmentUrls)
+                ? new List<string>()
+                : workItem.AttachmentUrls.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(u => u.Trim()).ToList();
+
+            existingUrls.Add(fileUrl);
+            workItem.AttachmentUrls = string.Join(",", existingUrls);
+            workItem.UpdatedAt = DateTime.UtcNow;
+
+            await workItemRepo.SaveAsync();
+
+            await activityRepo.AddAsync(new WorkItemActivityLog
+            {
+                WorkItemId = workItem.Id,
+                Action = "AttachmentAdded",
+                FieldName = "AttachmentUrls",
+                OldValue = "",
+                NewValue = fileUrl,
+                ByUserId = userId,
+                Timestamp = DateTime.UtcNow
+            });
+            await activityRepo.SaveAsync();
+
+            var result = await _projectService.GetWorkItemByIdAsync(workItemId);
+            return Ok(ApiResponse<WorkItemResponseDto>.SuccessResponse(result!, "Attachment added successfully"));
+        }
+
+        [HttpDelete("workitems/{workItemId}/attachments")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> DeleteWorkItemAttachment(
+            int workItemId,
+            [FromQuery] string fileUrl,
+            [FromServices] IRepository<WorkItem> workItemRepo,
+            [FromServices] IRepository<WorkItemActivityLog> activityRepo)
+        {
+            if (string.IsNullOrWhiteSpace(fileUrl))
+                return BadRequest(ApiResponse<string>.FailureResponse("File URL is required"));
+
+            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            var workItem = await workItemRepo.GetAsync(w => w.Id == workItemId);
+            if (workItem == null)
+                return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
+
+            if (userRole != "ProductManager")
+            {
+                var dbContext = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var isMember = (workItem.AssignedToUserId == userId || workItem.CreatedByUserId == userId) ||
+                    await dbContext.Projects
+                        .Where(p => p.Id == workItem.ProjectId)
+                        .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+
+                if (!isMember)
+                    return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to delete attachments"));
+            }
+
+            if (!string.IsNullOrEmpty(workItem.AttachmentUrls))
+            {
+                var list = workItem.AttachmentUrls
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(u => u.Trim())
+                    .Where(u => !u.Equals(fileUrl.Trim(), StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                workItem.AttachmentUrls = list.Count > 0 ? string.Join(",", list) : null;
+                workItem.UpdatedAt = DateTime.UtcNow;
+                await workItemRepo.SaveAsync();
+
+                await activityRepo.AddAsync(new WorkItemActivityLog
+                {
+                    WorkItemId = workItem.Id,
+                    Action = "AttachmentRemoved",
+                    FieldName = "AttachmentUrls",
+                    OldValue = fileUrl,
+                    NewValue = "",
+                    ByUserId = userId,
+                    Timestamp = DateTime.UtcNow
+                });
+                await activityRepo.SaveAsync();
+            }
+
+            var result = await _projectService.GetWorkItemByIdAsync(workItemId);
+            return Ok(ApiResponse<WorkItemResponseDto>.SuccessResponse(result!, "Attachment deleted successfully"));
+        }
+
         [HttpDelete("workitems/{workItemId}")]
         [Authorize(Roles = "Employee,ProductManager")]
         public async Task<IActionResult> DeleteWorkItem(int workItemId, [FromServices] IRepository<WorkItem> workItemRepo)
@@ -541,9 +820,17 @@ namespace TeamTrack.Controllers
             if (workItem == null)
                 return NotFound(ApiResponse<string>.FailureResponse("Task not found"));
 
-          
-            if (userRole != "ProductManager" && workItem.CreatedByUserId != userId)
-                return StatusCode(403, ApiResponse<string>.FailureResponse("Only the creator of this task can delete it"));
+
+            if (userRole != "ProductManager")
+            {
+                var dbContext = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var isMember = await dbContext.Projects
+                    .Where(p => p.Id == workItem.ProjectId)
+                    .AnyAsync(p => p.AssignedEmployees.Any(e => e.Id == userId));
+
+                if (!isMember)
+                    return StatusCode(403, ApiResponse<string>.FailureResponse("You must be a member of this project to delete tasks"));
+            }
 
             // Delete attachment files from storage before removing DB record
             // Delete attachment files from storage before removing DB record
@@ -875,9 +1162,15 @@ namespace TeamTrack.Controllers
         // ==================== HIERARCHY MANAGEMENT (CLIENT - PRODUCT - MODULE) ====================
 
         [HttpGet("clients")]
-        public async Task<IActionResult> GetClients([FromServices] IRepository<Client> clientRepo)
+        public async Task<IActionResult> GetClients([FromQuery] int? productId, [FromServices] IRepository<Client> clientRepo)
         {
-            var clients = await clientRepo.Query()
+            var query = clientRepo.Query().Include(c => c.Product).AsQueryable();
+            if (productId.HasValue && productId.Value > 0)
+            {
+                query = query.Where(c => c.ProductId == productId.Value);
+            }
+
+            var clients = await query
                 .OrderBy(c => c.Name)
                 .Select(c => new ClientDto
                 {
@@ -885,6 +1178,30 @@ namespace TeamTrack.Controllers
                     ClientNumber = c.ClientNumber,
                     Name = c.Name,
                     Description = c.Description,
+                    ProductId = c.ProductId,
+                    ProductName = c.Product != null ? c.Product.Name : null,
+                    CreatedAt = c.CreatedAt
+                })
+                .ToListAsync();
+
+            return Ok(ApiResponse<List<ClientDto>>.SuccessResponse(clients, "Clients fetched successfully"));
+        }
+
+        [HttpGet("products/{productId}/clients")]
+        public async Task<IActionResult> GetClientsByProduct(int productId, [FromServices] IRepository<Client> clientRepo)
+        {
+            var clients = await clientRepo.Query()
+                .Include(c => c.Product)
+                .Where(c => c.ProductId == productId)
+                .OrderBy(c => c.Name)
+                .Select(c => new ClientDto
+                {
+                    Id = c.Id,
+                    ClientNumber = c.ClientNumber,
+                    Name = c.Name,
+                    Description = c.Description,
+                    ProductId = c.ProductId,
+                    ProductName = c.Product != null ? c.Product.Name : null,
                     CreatedAt = c.CreatedAt
                 })
                 .ToListAsync();
@@ -899,29 +1216,70 @@ namespace TeamTrack.Controllers
             if (string.IsNullOrWhiteSpace(request.Name))
                 return BadRequest(ApiResponse<string>.FailureResponse("Client name is required"));
 
-            var count = await clientRepo.Query().CountAsync();
-            var client = new Client
+            const int maxRetries = 10;
+            for (int attempt = 0; attempt < maxRetries; attempt++)
             {
-                ClientNumber = $"CLT-{(count + 1):D3}",
-                Name = request.Name.Trim(),
-                Description = request.Description?.Trim(),
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
+                var existingNumbers = await clientRepo.Query().Select(c => c.ClientNumber).ToListAsync();
+                var clientNumber = SequenceHelper.GenerateNextNumber(existingNumbers, "CLT");
 
-            await clientRepo.AddAsync(client);
-            await clientRepo.SaveAsync();
+                var client = new Client
+                {
+                    ClientNumber = clientNumber,
+                    Name = request.Name.Trim(),
+                    Description = request.Description?.Trim(),
+                    ProductId = request.ProductId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
 
-            var dto = new ClientDto
-            {
-                Id = client.Id,
-                ClientNumber = client.ClientNumber,
-                Name = client.Name,
-                Description = client.Description,
-                CreatedAt = client.CreatedAt
-            };
+                try
+                {
+                    await clientRepo.AddAsync(client);
+                    await clientRepo.SaveAsync();
 
-            return Ok(ApiResponse<ClientDto>.SuccessResponse(dto, "Client created successfully"));
+                    var created = await clientRepo.Query().Include(c => c.Product).FirstOrDefaultAsync(c => c.Id == client.Id);
+
+                    var dto = new ClientDto
+                    {
+                        Id = client.Id,
+                        ClientNumber = client.ClientNumber,
+                        Name = client.Name,
+                        Description = client.Description,
+                        ProductId = client.ProductId,
+                        ProductName = created?.Product?.Name,
+                        CreatedAt = client.CreatedAt
+                    };
+
+                    return Ok(ApiResponse<ClientDto>.SuccessResponse(dto, "Client created successfully"));
+                }
+                catch (DbUpdateException) when (attempt < maxRetries - 1)
+                {
+                    clientRepo.Detach(client);
+                }
+            }
+
+            return StatusCode(500, ApiResponse<string>.FailureResponse("Failed to generate a unique client code. Please try again."));
+        }
+
+        [HttpGet("products")]
+        public async Task<IActionResult> GetAllProducts([FromServices] IRepository<Product> productRepo)
+        {
+            var products = await productRepo.Query()
+                .Include(p => p.Project)
+                .OrderBy(p => p.Name)
+                .Select(p => new ProductDto
+                {
+                    Id = p.Id,
+                    ProductNumber = p.ProductNumber,
+                    Name = p.Name,
+                    Description = p.Description,
+                    ProjectId = p.ProjectId,
+                    ProjectName = p.Project != null ? p.Project.Name : string.Empty,
+                    CreatedAt = p.CreatedAt
+                })
+                .ToListAsync();
+
+            return Ok(ApiResponse<List<ProductDto>>.SuccessResponse(products, "Products fetched successfully"));
         }
 
         [HttpGet("{projectId}/products")]
@@ -953,40 +1311,80 @@ namespace TeamTrack.Controllers
             if (string.IsNullOrWhiteSpace(request.Name))
                 return BadRequest(ApiResponse<string>.FailureResponse("Product name is required"));
 
-            var projectExists = await projectRepo.Query().AnyAsync(p => p.Id == request.ProjectId);
-            if (!projectExists)
-                return NotFound(ApiResponse<string>.FailureResponse("Project not found"));
-
-            var count = await productRepo.Query().CountAsync();
-            var product = new Product
+            if (request.ProjectId.HasValue && request.ProjectId.Value > 0)
             {
-                ProductNumber = $"PRD-{(count + 1):D3}",
-                Name = request.Name.Trim(),
-                Description = request.Description?.Trim(),
-                ProjectId = request.ProjectId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
+                var projectExists = await projectRepo.Query().AnyAsync(p => p.Id == request.ProjectId.Value);
+                if (!projectExists)
+                    return NotFound(ApiResponse<string>.FailureResponse("Project not found"));
+            }
 
-            await productRepo.AddAsync(product);
-            await productRepo.SaveAsync();
-
-            var created = await productRepo.Query()
-                .Include(p => p.Project)
-                .FirstOrDefaultAsync(p => p.Id == product.Id);
-
-            var dto = new ProductDto
+            int? linkedProjectId = request.ProjectId.HasValue && request.ProjectId.Value > 0 ? request.ProjectId : null;
+            if (!linkedProjectId.HasValue)
             {
-                Id = created!.Id,
-                ProductNumber = created.ProductNumber,
-                Name = created.Name,
-                Description = created.Description,
-                ProjectId = created.ProjectId,
-                ProjectName = created.Project?.Name ?? string.Empty,
-                CreatedAt = created.CreatedAt
-            };
+                var existingPrjNumbers = await projectRepo.Query().Select(p => p.ProjectNumber).ToListAsync();
+                var prjNumber = SequenceHelper.GenerateNextNumber(existingPrjNumbers, "PRJ");
+                var currentUserIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                var creatorUserId = !string.IsNullOrEmpty(currentUserIdClaim) ? int.Parse(currentUserIdClaim) : 1;
+                var backingProject = new Project
+                {
+                    ProjectNumber = prjNumber,
+                    Name = request.Name.Trim(),
+                    Description = request.Description?.Trim(),
+                    Status = "active",
+                    CreatedByUserId = creatorUserId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await projectRepo.AddAsync(backingProject);
+                await projectRepo.SaveAsync();
+                linkedProjectId = backingProject.Id;
+            }
 
-            return Ok(ApiResponse<ProductDto>.SuccessResponse(dto, "Product created successfully"));
+            const int maxRetries = 10;
+            for (int attempt = 0; attempt < maxRetries; attempt++)
+            {
+                var existingNumbers = await productRepo.Query().Select(p => p.ProductNumber).ToListAsync();
+                var productNumber = SequenceHelper.GenerateNextNumber(existingNumbers, "PRD");
+
+                var product = new Product
+                {
+                    ProductNumber = productNumber,
+                    Name = request.Name.Trim(),
+                    Description = request.Description?.Trim(),
+                    ProjectId = linkedProjectId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                try
+                {
+                    await productRepo.AddAsync(product);
+                    await productRepo.SaveAsync();
+
+                    var created = await productRepo.Query()
+                        .Include(p => p.Project)
+                        .FirstOrDefaultAsync(p => p.Id == product.Id);
+
+                    var dto = new ProductDto
+                    {
+                        Id = created!.Id,
+                        ProductNumber = created.ProductNumber,
+                        Name = created.Name,
+                        Description = created.Description,
+                        ProjectId = created.ProjectId,
+                        ProjectName = created.Project?.Name ?? string.Empty,
+                        CreatedAt = created.CreatedAt
+                    };
+
+                    return Ok(ApiResponse<ProductDto>.SuccessResponse(dto, "Product created successfully"));
+                }
+                catch (DbUpdateException) when (attempt < maxRetries - 1)
+                {
+                    productRepo.Detach(product);
+                }
+            }
+
+            return StatusCode(500, ApiResponse<string>.FailureResponse("Failed to generate a unique product code. Please try again."));
         }
 
         [HttpGet("products/{productId}/modules")]
@@ -1022,36 +1420,51 @@ namespace TeamTrack.Controllers
             if (!productExists)
                 return NotFound(ApiResponse<string>.FailureResponse("Product not found"));
 
-            var count = await moduleRepo.Query().CountAsync();
-            var module = new Module
+            const int maxRetries = 10;
+            for (int attempt = 0; attempt < maxRetries; attempt++)
             {
-                ModuleNumber = $"MDL-{(count + 1):D3}",
-                Name = request.Name.Trim(),
-                Description = request.Description?.Trim(),
-                ProductId = request.ProductId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
+                var existingNumbers = await moduleRepo.Query().Select(m => m.ModuleNumber).ToListAsync();
+                var moduleNumber = SequenceHelper.GenerateNextNumber(existingNumbers, "MDL");
 
-            await moduleRepo.AddAsync(module);
-            await moduleRepo.SaveAsync();
+                var module = new Module
+                {
+                    ModuleNumber = moduleNumber,
+                    Name = request.Name.Trim(),
+                    Description = request.Description?.Trim(),
+                    ProductId = request.ProductId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
 
-            var created = await moduleRepo.Query()
-                .Include(m => m.Product)
-                .FirstOrDefaultAsync(m => m.Id == module.Id);
+                try
+                {
+                    await moduleRepo.AddAsync(module);
+                    await moduleRepo.SaveAsync();
 
-            var dto = new ModuleDto
-            {
-                Id = created!.Id,
-                ModuleNumber = created.ModuleNumber,
-                Name = created.Name,
-                Description = created.Description,
-                ProductId = created.ProductId,
-                ProductName = created.Product?.Name ?? string.Empty,
-                CreatedAt = created.CreatedAt
-            };
+                    var created = await moduleRepo.Query()
+                        .Include(m => m.Product)
+                        .FirstOrDefaultAsync(m => m.Id == module.Id);
 
-            return Ok(ApiResponse<ModuleDto>.SuccessResponse(dto, "Module created successfully"));
+                    var dto = new ModuleDto
+                    {
+                        Id = created!.Id,
+                        ModuleNumber = created.ModuleNumber,
+                        Name = created.Name,
+                        Description = created.Description,
+                        ProductId = created.ProductId,
+                        ProductName = created.Product != null ? created.Product.Name : string.Empty,
+                        CreatedAt = created.CreatedAt
+                    };
+
+                    return Ok(ApiResponse<ModuleDto>.SuccessResponse(dto, "Module created successfully"));
+                }
+                catch (DbUpdateException) when (attempt < maxRetries - 1)
+                {
+                    moduleRepo.Detach(module);
+                }
+            }
+
+            return StatusCode(500, ApiResponse<string>.FailureResponse("Failed to generate a unique module code. Please try again."));
         }
 
         [HttpGet("{projectId}/builds")]
@@ -1191,9 +1604,15 @@ namespace TeamTrack.Controllers
 
             client.Name = request.Name.Trim();
             client.Description = request.Description?.Trim();
+            if (request.ProductId.HasValue)
+            {
+                client.ProductId = request.ProductId.Value > 0 ? request.ProductId : null;
+            }
             client.UpdatedAt = DateTime.UtcNow;
 
             await clientRepo.SaveAsync();
+
+            var updated = await clientRepo.Query().Include(c => c.Product).FirstOrDefaultAsync(c => c.Id == client.Id);
 
             var dto = new ClientDto
             {
@@ -1201,6 +1620,8 @@ namespace TeamTrack.Controllers
                 ClientNumber = client.ClientNumber,
                 Name = client.Name,
                 Description = client.Description,
+                ProductId = client.ProductId,
+                ProductName = updated?.Product?.Name,
                 CreatedAt = client.CreatedAt
             };
 
@@ -1218,17 +1639,20 @@ namespace TeamTrack.Controllers
             if (product == null)
                 return NotFound(ApiResponse<string>.FailureResponse("Product not found"));
 
-            var projectExists = await projectRepo.Query().AnyAsync(p => p.Id == request.ProjectId);
-            if (!projectExists)
-                return NotFound(ApiResponse<string>.FailureResponse("Project not found"));
+            if (request.ProjectId.HasValue && request.ProjectId.Value > 0)
+            {
+                var projectExists = await projectRepo.Query().AnyAsync(p => p.Id == request.ProjectId.Value);
+                if (!projectExists)
+                    return NotFound(ApiResponse<string>.FailureResponse("Project not found"));
+            }
 
-            var exists = await productRepo.Query().AnyAsync(p => p.Id != productId && p.ProjectId == request.ProjectId && p.Name.ToLower() == request.Name.Trim().ToLower());
+            var exists = await productRepo.Query().AnyAsync(p => p.Id != productId && p.Name.ToLower() == request.Name.Trim().ToLower());
             if (exists)
-                return BadRequest(ApiResponse<string>.FailureResponse("Product name already exists for this project"));
+                return BadRequest(ApiResponse<string>.FailureResponse("Product name already exists"));
 
             product.Name = request.Name.Trim();
             product.Description = request.Description?.Trim();
-            product.ProjectId = request.ProjectId;
+            product.ProjectId = request.ProjectId.HasValue && request.ProjectId.Value > 0 ? request.ProjectId : null;
             product.UpdatedAt = DateTime.UtcNow;
 
             await productRepo.SaveAsync();
@@ -1335,6 +1759,126 @@ namespace TeamTrack.Controllers
             };
 
             return Ok(ApiResponse<SoftwareBuildDto>.SuccessResponse(dto, "Build updated successfully"));
+        }
+
+        // ==================== CLIENT MODULES ====================
+
+        [HttpGet("clients/{clientId}/modules")]
+        public async Task<IActionResult> GetClientModules(int clientId)
+        {
+            var modules = await _projectService.GetClientModulesByClientAsync(clientId);
+            return Ok(ApiResponse<List<ClientModuleDto>>.SuccessResponse(modules, "Client modules fetched successfully"));
+        }
+
+        [HttpPost("client-modules")]
+        [Authorize(Roles = "ProductManager")]
+        public async Task<IActionResult> CreateClientModule([FromBody] CreateClientModuleRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+                return BadRequest(ApiResponse<string>.FailureResponse("Client module name is required"));
+
+            try
+            {
+                var result = await _projectService.CreateClientModuleAsync(request);
+                return Ok(ApiResponse<ClientModuleDto>.SuccessResponse(result, "Client module created successfully"));
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ApiResponse<string>.FailureResponse(ex.Message));
+            }
+        }
+
+        [HttpPut("client-modules/{clientModuleId}")]
+        [Authorize(Roles = "ProductManager")]
+        public async Task<IActionResult> UpdateClientModule(int clientModuleId, [FromBody] UpdateClientModuleRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+                return BadRequest(ApiResponse<string>.FailureResponse("Client module name is required"));
+
+            try
+            {
+                var result = await _projectService.UpdateClientModuleAsync(clientModuleId, request);
+                if (result == null)
+                    return NotFound(ApiResponse<string>.FailureResponse("Client module not found"));
+
+                return Ok(ApiResponse<ClientModuleDto>.SuccessResponse(result, "Client module updated successfully"));
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ApiResponse<string>.FailureResponse(ex.Message));
+            }
+        }
+
+        [HttpDelete("client-modules/{clientModuleId}")]
+        [Authorize(Roles = "ProductManager")]
+        public async Task<IActionResult> DeleteClientModule(int clientModuleId)
+        {
+            var success = await _projectService.DeleteClientModuleAsync(clientModuleId);
+            if (!success)
+                return NotFound(ApiResponse<string>.FailureResponse("Client module not found"));
+
+            return Ok(ApiResponse<string>.SuccessResponse("Client module deleted successfully", "Client module deleted successfully"));
+        }
+
+        // ==================== PARENT-BASED WORK ITEMS ====================
+
+        [HttpGet("parents/workitems")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> GetWorkItemsByParent([FromQuery] int? moduleId, [FromQuery] int? clientModuleId, [FromQuery] int? productId)
+        {
+            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var userRole = User.FindFirstValue(ClaimTypes.Role) ?? "Employee";
+
+            var items = await _projectService.GetWorkItemsByParentAsync(moduleId, clientModuleId, productId, userId, userRole);
+            return Ok(ApiResponse<List<WorkItemResponseDto>>.SuccessResponse(items, "Work items fetched successfully"));
+        }
+
+        [HttpGet("parents/workitems/paged")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> GetWorkItemsByParentPaged(
+            [FromQuery] int? moduleId,
+            [FromQuery] int? clientModuleId,
+            [FromQuery] int? productId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] string? status = null,
+            [FromQuery] string? search = null,
+            [FromQuery] string? assignedTo = null,
+            [FromQuery] string? dueDate = null)
+        {
+            var result = await _projectService.GetWorkItemsByParentPagedAsync(moduleId, clientModuleId, productId, page, pageSize, status, search, assignedTo, dueDate);
+            return Ok(ApiResponse<PagedResult<WorkItemResponseDto>>.SuccessResponse(result, "Work items fetched successfully"));
+        }
+
+        [HttpPost("workitems")]
+        [Authorize(Roles = "Employee,ProductManager")]
+        public async Task<IActionResult> CreateWorkItemDirect([FromBody] CreateWorkItemRequestDto request)
+        {
+            if (string.IsNullOrEmpty(request.Title))
+                return BadRequest(ApiResponse<string>.FailureResponse("Title is required"));
+
+            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            try
+            {
+                var projectId = request.ProjectId ?? 0;
+                var result = await _projectService.CreateWorkItemAsync(projectId, request, userId);
+                return Ok(ApiResponse<WorkItemResponseDto>.SuccessResponse(result, "Work item created successfully"));
+            }
+            catch (Exception ex)
+            {
+                var messages = new List<string>();
+                Exception? current = ex;
+                while (current != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(current.Message))
+                    {
+                        messages.Add(current.Message);
+                    }
+                    current = current.InnerException;
+                }
+                var detail = string.Join(" -> ", messages.Distinct());
+                return StatusCode(500, ApiResponse<string>.FailureResponse(detail));
+            }
         }
     }
 

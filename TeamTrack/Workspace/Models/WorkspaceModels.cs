@@ -3,8 +3,6 @@ namespace TeamTrack.Workspace.Models
     public static class CampaignStatus
     {
         public const string Draft = "draft";
-        public const string Pending = "pending";
-        public const string Approved = "approved";
         public const string Sending = "sending"; // claimed by a send in progress
         public const string Sent = "sent";
     }
@@ -33,32 +31,12 @@ namespace TeamTrack.Workspace.Models
         public string Subject { get; set; } = string.Empty;
         public string Body { get; set; } = string.Empty;
         public string Status { get; set; } = CampaignStatus.Draft;
-        public string? ManagerNote { get; set; }
         public int CreatedByUserId { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? SentAt { get; set; }
 
-        // set for drafts created by an Excel import (nullable: older rows and hand-made drafts have none)
-        public int? ImportId { get; set; }
-        public int? SourceRow { get; set; }
-        public string? Segment { get; set; }
-        public string? Priority { get; set; }
-        public string? SendWave { get; set; }
-
-        public WsCampaignImport? Import { get; set; }
         public ICollection<WsCampaignHistory> History { get; set; } = [];
-    }
-
-    /// <summary>One uploaded Excel file that was turned into campaign drafts.</summary>
-    public class WsCampaignImport
-    {
-        public int Id { get; set; }
-        public string FileName { get; set; } = string.Empty;
-        public int ImportedBy { get; set; }
-        public int TotalRows { get; set; }
-        public int ImportedRows { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 
     public class WsCampaignHistory

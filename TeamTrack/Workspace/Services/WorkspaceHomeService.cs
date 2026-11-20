@@ -55,15 +55,11 @@ namespace TeamTrack.Workspace.Services
         // A PM cannot act on their own items, so own pending items are excluded from both tiles and to-dos.
         private async Task FillPmAsync(HomeDto home, CurrentUser user, int awayCount, DateTime monthStart, DateTime monthEnd)
         {
-            var pendingMails = await _db.Campaigns
-                .Where(c => c.Status == CampaignStatus.Pending && c.CreatedByUserId != user.Id)
-                .OrderBy(c => c.UpdatedAt).ToListAsync();
             var pendingTimeOff = await _db.TimeOffRequests
                 .Where(r => r.Status == TimeOffStatus.Pending && r.UserId != user.Id)
                 .OrderBy(r => r.CreatedAt).ToListAsync();
             var sentThisMonth = await _db.Campaigns.CountAsync(c => c.Status == CampaignStatus.Sent && c.SentAt >= monthStart && c.SentAt < monthEnd);
 
-            home.Tiles["mailsWaitingApproval"] = pendingMails.Count;
             home.Tiles["timeOffWaiting"] = pendingTimeOff.Count;
             home.Tiles["peopleAwayToday"] = awayCount;
             home.Tiles["mailsSentThisMonth"] = sentThisMonth;
@@ -72,10 +68,6 @@ namespace TeamTrack.Workspace.Services
             var names = await _app.Users.Where(u => requesterIds.Contains(u.Id))
                 .ToDictionaryAsync(u => u.Id, u => u.Name);
 
-            home.Todo.AddRange(pendingMails.Select(c => new HomeTodoDto
-            {
-                Kind = "campaign", Id = c.Id, Label = $"Approve mail: {c.Title}", Link = $"/workspace/campaigns/{c.Id}",
-            }));
             home.Todo.AddRange(pendingTimeOff.Select(r => new HomeTodoDto
             {
                 Kind = "time_off", Id = r.Id, Link = $"/workspace/leave?request={r.Id}",
@@ -91,7 +83,6 @@ namespace TeamTrack.Workspace.Services
             var balances = await _timeOff.BalancesAsync(user.Id);
 
             home.Tiles["mySentThisMonth"] = mine.Count(c => c.Status == CampaignStatus.Sent && c.SentAt >= monthStart && c.SentAt < monthEnd);
-            home.Tiles["myWaitingApproval"] = mine.Count(c => c.Status == CampaignStatus.Pending);
             home.Tiles["casualLeaveLeft"] = balances.Leave.First(l => l.LeaveType == LeaveRules.Casual).Remaining;
             home.Tiles["permissionHoursLeft"] = balances.PermissionHoursLeftThisMonth;
 
@@ -100,11 +91,7 @@ namespace TeamTrack.Workspace.Services
                 Kind = "campaign", Id = c.Id, Label = $"{prefix}: {c.Title}", Link = $"/workspace/campaigns/{c.Id}",
             };
 
-            // Order: approved (send), drafts with changes asked, other drafts, pending.
-            home.Todo.AddRange(mine.Where(c => c.Status == CampaignStatus.Approved).Select(c => Todo(c, "Send mail")));
-            home.Todo.AddRange(mine.Where(c => c.Status == CampaignStatus.Draft && !string.IsNullOrWhiteSpace(c.ManagerNote)).Select(c => Todo(c, "Fix and resend")));
-            home.Todo.AddRange(mine.Where(c => c.Status == CampaignStatus.Draft && string.IsNullOrWhiteSpace(c.ManagerNote)).Select(c => Todo(c, "Finish draft")));
-            home.Todo.AddRange(mine.Where(c => c.Status == CampaignStatus.Pending).Select(c => Todo(c, "Waiting for approval")));
+            home.Todo.AddRange(mine.Where(c => c.Status == CampaignStatus.Draft).Select(c => Todo(c, "Finish draft")));
         }
     }
 }

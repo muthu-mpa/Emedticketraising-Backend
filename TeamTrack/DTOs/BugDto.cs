@@ -20,7 +20,7 @@ namespace TeamTrack.DTOs
 
     public class ReassignBugRequestDto
     {
-        public int AssignedToUserId { get; set; }
+        public int? AssignedToUserId { get; set; }
     }
 
     public class BugResponseDto

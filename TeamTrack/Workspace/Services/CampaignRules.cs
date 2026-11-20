@@ -1,8 +1,7 @@
 namespace TeamTrack.Workspace.Services
 {
     /// <summary>
-    /// Content rules for campaign mails, shared by the Excel import (flags) and the submit actions (enforcement),
-    /// so a row flagged ERROR in the preview is exactly what the server refuses to submit.
+    /// Content rules for campaign mails, enforced when a mail is sent.
     /// </summary>
     public static class CampaignRules
     {
@@ -16,15 +15,15 @@ namespace TeamTrack.Workspace.Services
         public static bool MentionsAutonom(params string?[] texts)
             => texts.Any(t => t != null && t.Contains("autonom", StringComparison.OrdinalIgnoreCase));
 
-        /// <summary>The reasons a mail cannot be sent for approval yet (the ERROR rules). Empty when it can.</summary>
-        public static List<string> SubmitBlockers(string? clientEmail, params string?[] texts)
+        /// <summary>The reasons a mail cannot be sent yet (the ERROR rules). Empty when it can.</summary>
+        public static List<string> SendBlockers(string? clientEmail, params string?[] texts)
         {
             var problems = new List<string>();
             if (string.IsNullOrWhiteSpace(clientEmail)) problems.Add("Client email is missing.");
             else if (!CampaignService.IsValidEmail(clientEmail)) problems.Add("Client email is not a valid email address.");
 
             var left = PlaceholdersIn(texts);
-            if (left.Count > 0) problems.Add($"Replace the placeholders before sending for approval: {string.Join(", ", left)}.");
+            if (left.Count > 0) problems.Add($"Replace the placeholders before sending: {string.Join(", ", left)}.");
             return problems;
         }
     }

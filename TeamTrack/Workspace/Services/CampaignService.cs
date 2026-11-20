@@ -11,19 +11,11 @@ namespace TeamTrack.Workspace.Services
 {
     public interface ICampaignService
     {
-        Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search, int? importId = null);
+        Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search);
         Task<WsResult<CampaignDetailDto>> GetAsync(CurrentUser user, int id);
         Task<WsResult<CampaignDetailDto>> CreateAsync(CurrentUser user, CampaignInput input);
         Task<WsResult<CampaignDetailDto>> UpdateAsync(CurrentUser user, int id, CampaignInput input);
-        Task<WsResult<CampaignDetailDto>> SubmitAsync(CurrentUser user, int id);
-        Task<WsResult<CampaignDetailDto>> ApproveAsync(CurrentUser user, int id);
-        Task<WsResult<CampaignDetailDto>> AskChangesAsync(CurrentUser user, int id, string? note);
-        Task<WsResult<CampaignDetailDto>> TakeBackAsync(CurrentUser user, int id);
         Task<WsResult<CampaignDetailDto>> SendAsync(CurrentUser user, int id, bool confirm);
-        /// <summary>Submit / approve each id on its own, with the same rules as the single action. One result per id.</summary>
-        Task<WsResult<BulkResultDto>> BulkSubmitAsync(CurrentUser user, IReadOnlyList<int>? ids);
-        Task<WsResult<BulkResultDto>> BulkApproveAsync(CurrentUser user, IReadOnlyList<int>? ids);
-        IReadOnlyList<CampaignTemplateDto> Templates();
     }
 
     public class CampaignService : ICampaignService
@@ -51,11 +43,10 @@ namespace TeamTrack.Workspace.Services
 
         // ---------- queries ----------
 
-        public async Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search, int? importId = null)
+        public async Task<WsResult<CampaignListDto>> ListAsync(CurrentUser user, string? status, bool onlyMine, string? search)
         {
             var query = _db.Campaigns.AsQueryable();
             if (onlyMine) query = query.Where(c => c.CreatedByUserId == user.Id);
-            if (importId != null) query = query.Where(c => c.ImportId == importId);
 
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -67,8 +58,7 @@ namespace TeamTrack.Workspace.Services
 
             var counts = new Dictionary<string, int>
             {
-                [CampaignStatus.Draft] = 0, [CampaignStatus.Pending] = 0,
-                [CampaignStatus.Approved] = 0, [CampaignStatus.Sending] = 0, [CampaignStatus.Sent] = 0,
+                [CampaignStatus.Draft] = 0, [CampaignStatus.Sending] = 0, [CampaignStatus.Sent] = 0,
             };
             foreach (var g in await query.GroupBy(c => c.Status).Select(g => new { g.Key, N = g.Count() }).ToListAsync())
                 counts[g.Key] = g.N;
@@ -76,7 +66,7 @@ namespace TeamTrack.Workspace.Services
             if (!string.IsNullOrWhiteSpace(status))
             {
                 if (!counts.ContainsKey(status))
-                    return WsResult<CampaignListDto>.Fail(400, "Status must be draft, pending, approved or sent.");
+                    return WsResult<CampaignListDto>.Fail(400, "Status must be draft, sending or sent.");
                 query = query.Where(c => c.Status == status);
             }
 
@@ -94,8 +84,6 @@ namespace TeamTrack.Workspace.Services
             var c = await _db.Campaigns.Include(x => x.History).FirstOrDefaultAsync(x => x.Id == id);
             return c == null ? NotFound() : WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user));
         }
-
-        public IReadOnlyList<CampaignTemplateDto> Templates() => TemplateData;
 
         // ---------- commands ----------
 
@@ -131,125 +119,9 @@ namespace TeamTrack.Workspace.Services
             return WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user), "Draft saved.");
         }
 
-        public async Task<WsResult<CampaignDetailDto>> SubmitAsync(CurrentUser user, int id)
-        {
-            var c = await LoadAsync(id);
-            if (c == null) return NotFound();
-            if (c.CreatedByUserId != user.Id) return WsResult<CampaignDetailDto>.Fail(403, "Only the creator can send this mail for approval.");
-            if (c.Status != CampaignStatus.Draft) return WsResult<CampaignDetailDto>.Fail(409, "Only a draft can be sent for approval.");
-
-            var error = ValidateFields(new CampaignInput
-            {
-                Title = c.Title, ClientName = c.ClientName, ContactName = c.ContactName,
-                ClientEmail = c.ClientEmail, Subject = c.Subject, Body = c.Body,
-            }, requireAll: true);
-            if (error != null) return WsResult<CampaignDetailDto>.Fail(400, error);
-            var blockers = SubmitBlockers(c);
-            if (blockers.Count > 0) return WsResult<CampaignDetailDto>.Fail(400, string.Join(" ", blockers));
-
-            c.Status = CampaignStatus.Pending;
-            c.ManagerNote = null;
-            c.UpdatedAt = DateTime.UtcNow;
-            AddHistory(c, user.Id, "Sent for approval", null);
-            _notifications.Queue(await _notifications.PmIdsAsync(c.CreatedByUserId), "campaign_submitted",
-                $"{user.Name} sent \"{c.Title}\" for approval.", Link(c));
-            await _db.SaveChangesAsync();
-            return WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user), "Sent for approval.");
-        }
-
-        public async Task<WsResult<CampaignDetailDto>> ApproveAsync(CurrentUser user, int id)
-        {
-            var c = await LoadAsync(id);
-            if (c == null) return NotFound();
-            var denied = CheckApprover(user, c, "approve");
-            if (denied != null) return denied;
-
-            c.Status = CampaignStatus.Approved;
-            c.UpdatedAt = DateTime.UtcNow;
-            AddHistory(c, user.Id, "Approved", null);
-            _notifications.Queue([c.CreatedByUserId], "campaign_approved",
-                $"{user.Name} approved \"{c.Title}\". You can send it now.", Link(c));
-            await _db.SaveChangesAsync();
-            return WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user), "Approved.");
-        }
-
-        public async Task<WsResult<CampaignDetailDto>> AskChangesAsync(CurrentUser user, int id, string? note)
-        {
-            var c = await LoadAsync(id);
-            if (c == null) return NotFound();
-            var denied = CheckApprover(user, c, "review");
-            if (denied != null) return denied;
-            if (string.IsNullOrWhiteSpace(note)) return WsResult<CampaignDetailDto>.Fail(400, "Please say what needs to change.");
-            note = note.Trim();
-            if (note.Length > 2000) return WsResult<CampaignDetailDto>.Fail(400, "The note is too long (max 2000 characters).");
-
-            c.Status = CampaignStatus.Draft;
-            c.ManagerNote = note;
-            c.UpdatedAt = DateTime.UtcNow;
-            AddHistory(c, user.Id, "Asked for changes", note);
-            _notifications.Queue([c.CreatedByUserId], "campaign_changes_asked",
-                $"{user.Name} asked for changes on \"{c.Title}\".", Link(c));
-            await _db.SaveChangesAsync();
-            return WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user), "Sent back to draft.");
-        }
-
-        public async Task<WsResult<CampaignDetailDto>> TakeBackAsync(CurrentUser user, int id)
-        {
-            var c = await LoadAsync(id);
-            if (c == null) return NotFound();
-            if (c.CreatedByUserId != user.Id) return WsResult<CampaignDetailDto>.Fail(403, "Only the creator can take this mail back.");
-            if (c.Status != CampaignStatus.Pending) return WsResult<CampaignDetailDto>.Fail(409, "Only a mail waiting for approval can be taken back.");
-
-            c.Status = CampaignStatus.Draft;
-            c.UpdatedAt = DateTime.UtcNow;
-            AddHistory(c, user.Id, "Took back to draft", null);
-            await _db.SaveChangesAsync();
-            return WsResult<CampaignDetailDto>.Ok(await ToDetailAsync(c, user), "Taken back to draft.");
-        }
-
-        // ---------- bulk ----------
-
-        public const int MaxBulkItems = 500;
-
-        public Task<WsResult<BulkResultDto>> BulkSubmitAsync(CurrentUser user, IReadOnlyList<int>? ids)
-            => BulkAsync(ids, id => SubmitAsync(user, id));
-
-        public Task<WsResult<BulkResultDto>> BulkApproveAsync(CurrentUser user, IReadOnlyList<int>? ids)
-            => BulkAsync(ids, id => ApproveAsync(user, id));
-
-        private async Task<WsResult<BulkResultDto>> BulkAsync(IReadOnlyList<int>? ids, Func<int, Task<WsResult<CampaignDetailDto>>> action)
-        {
-            if (ids == null || ids.Count == 0) return WsResult<BulkResultDto>.Fail(400, "Select at least one campaign.");
-            var distinct = ids.Distinct().ToList();
-            if (distinct.Count > MaxBulkItems) return WsResult<BulkResultDto>.Fail(400, $"At most {MaxBulkItems} campaigns at a time.");
-
-            var result = new BulkResultDto();
-            foreach (var id in distinct)
-            {
-                BulkItemResultDto item;
-                try
-                {
-                    var r = await action(id);
-                    item = new BulkItemResultDto { Id = id, Success = r.Success, Status = r.Status, Message = r.Message, CampaignStatus = r.Data?.Status };
-                }
-                catch (Exception ex)
-                {
-                    // one bad item must not stop the rest; drop whatever the failed save left tracked
-                    _logger.LogError(ex, "Bulk action failed for campaign {CampaignId}.", id);
-                    _db.ChangeTracker.Clear();
-                    item = new BulkItemResultDto { Id = id, Success = false, Status = 500, Message = "Unexpected error. Nothing was changed for this item." };
-                }
-                if (!item.Success && item.CampaignStatus == null)
-                    item.CampaignStatus = await _db.Campaigns.Where(c => c.Id == id).Select(c => c.Status).FirstOrDefaultAsync();
-                if (item.Success) result.Succeeded++; else result.Failed++;
-                result.Items.Add(item);
-            }
-            return WsResult<BulkResultDto>.Ok(result, $"{result.Succeeded} done, {result.Failed} failed.");
-        }
-
-        /// <summary>The ERROR rules: a missing or invalid email, or placeholders left in the text. Enforced on every submit.</summary>
-        private static List<string> SubmitBlockers(WsCampaign c)
-            => CampaignRules.SubmitBlockers(c.ClientEmail, c.Title, c.ClientName, c.ContactName, c.Subject, c.Body);
+        /// <summary>The ERROR rules: a missing or invalid email, or placeholders left in the text. Enforced on every send.</summary>
+        private static List<string> SendBlockers(WsCampaign c)
+            => CampaignRules.SendBlockers(c.ClientEmail, c.Title, c.ClientName, c.ContactName, c.Subject, c.Body);
 
         public async Task<WsResult<CampaignDetailDto>> SendAsync(CurrentUser user, int id, bool confirm)
         {
@@ -257,10 +129,19 @@ namespace TeamTrack.Workspace.Services
             if (c == null) return NotFound();
             if (c.CreatedByUserId != user.Id) return WsResult<CampaignDetailDto>.Fail(403, "Only the creator can send this mail.");
             if (c.Status == CampaignStatus.Sending) return WsResult<CampaignDetailDto>.Fail(409, AlreadyBeingSent);
-            if (c.Status != CampaignStatus.Approved) return WsResult<CampaignDetailDto>.Fail(409, "Only an approved mail can be sent.");
+            if (c.Status != CampaignStatus.Draft) return WsResult<CampaignDetailDto>.Fail(409, "Only a draft can be sent.");
+
+            var error = ValidateFields(new CampaignInput
+            {
+                Title = c.Title, ClientName = c.ClientName, ContactName = c.ContactName,
+                ClientEmail = c.ClientEmail, Subject = c.Subject, Body = c.Body,
+            }, requireAll: true);
+            if (error != null) return WsResult<CampaignDetailDto>.Fail(400, error);
+            var blockers = SendBlockers(c);
+            if (blockers.Count > 0) return WsResult<CampaignDetailDto>.Fail(400, string.Join(" ", blockers));
             if (!confirm) return WsResult<CampaignDetailDto>.Fail(400, $"Please confirm: send to {c.ContactName} at {c.ClientEmail}.");
 
-            // Claim the mail atomically (UPDATE ... WHERE status = 'approved') so two requests can never both send it.
+            // Claim the mail atomically (UPDATE ... WHERE status = 'draft') so two requests can never both send it.
             if (!await TryClaimAsync(c.Id)) return WsResult<CampaignDetailDto>.Fail(409, AlreadyBeingSent);
 
             try
@@ -295,19 +176,19 @@ namespace TeamTrack.Workspace.Services
 
         private const string AlreadyBeingSent = "This mail is already being sent.";
 
-        /// <summary>approved -> sending in one conditional UPDATE. False when another request got there first.</summary>
+        /// <summary>draft -> sending in one conditional UPDATE. False when another request got there first.</summary>
         public async Task<bool> TryClaimAsync(int id)
         {
             var now = DateTime.UtcNow;
             var rows = await _db.Campaigns
-                .Where(x => x.Id == id && x.Status == CampaignStatus.Approved)
+                .Where(x => x.Id == id && x.Status == CampaignStatus.Draft)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(x => x.Status, CampaignStatus.Sending)
                     .SetProperty(x => x.UpdatedAt, now));
             return rows == 1;
         }
 
-        /// <summary>After a failed send: sending -> approved again, and the error is kept in the history.</summary>
+        /// <summary>After a failed send: sending -> draft again, and the error is kept in the history.</summary>
         private async Task ReleaseClaimAsync(WsCampaign c, CurrentUser user, string error)
         {
             try
@@ -316,15 +197,15 @@ namespace TeamTrack.Workspace.Services
                 await _db.Campaigns
                     .Where(x => x.Id == c.Id && x.Status == CampaignStatus.Sending)
                     .ExecuteUpdateAsync(s => s
-                        .SetProperty(x => x.Status, CampaignStatus.Approved)
+                        .SetProperty(x => x.Status, CampaignStatus.Draft)
                         .SetProperty(x => x.UpdatedAt, now));
-                c.Status = CampaignStatus.Approved;
+                c.Status = CampaignStatus.Draft;
                 AddHistory(c, user.Id, "Send failed", error.Length > 500 ? error[..500] : error);
                 await _db.SaveChangesAsync();
             }
             catch (Exception ex)
             {
-                _logger.LogCritical(ex, "Campaign {CampaignId}: sending failed AND releasing the 'sending' status failed. It needs a manual reset to 'approved'.", c.Id);
+                _logger.LogCritical(ex, "Campaign {CampaignId}: sending failed AND releasing the 'sending' status failed. It needs a manual reset to 'draft'.", c.Id);
             }
         }
 
@@ -335,14 +216,6 @@ namespace TeamTrack.Workspace.Services
         private static WsResult<CampaignDetailDto> NotFound() => WsResult<CampaignDetailDto>.Fail(404, "Campaign not found.");
 
         private static string Link(WsCampaign c) => $"/workspace/campaigns/{c.Id}";
-
-        private static WsResult<CampaignDetailDto>? CheckApprover(CurrentUser user, WsCampaign c, string verb)
-        {
-            if (!user.IsPM) return WsResult<CampaignDetailDto>.Fail(403, $"Only a Product Manager can {verb} a mail.");
-            if (c.CreatedByUserId == user.Id) return WsResult<CampaignDetailDto>.Fail(403, $"You cannot {verb} your own mail.");
-            if (c.Status != CampaignStatus.Pending) return WsResult<CampaignDetailDto>.Fail(409, "This mail is not waiting for approval.");
-            return null;
-        }
 
         private static void AddHistory(WsCampaign c, int userId, string action, string? note)
             => c.History.Add(new WsCampaignHistory { UserId = userId, Action = action, Note = note, CreatedAt = DateTime.UtcNow });
@@ -414,21 +287,12 @@ namespace TeamTrack.Workspace.Services
             var isCreator = c.CreatedByUserId == v.Id;
             d.Id = c.Id; d.Title = c.Title; d.ClientName = c.ClientName; d.ContactName = c.ContactName;
             d.ClientEmail = c.ClientEmail; d.Subject = c.Subject; d.Body = c.Body; d.Status = c.Status;
-            d.ManagerNote = c.ManagerNote; d.CreatedByUserId = c.CreatedByUserId;
-            d.ImportId = c.ImportId; d.SourceRow = c.SourceRow; d.Segment = c.Segment; d.Priority = c.Priority; d.SendWave = c.SendWave;
-            d.SubmitBlockers = c.Status == CampaignStatus.Draft ? SubmitBlockers(c) : [];
+            d.CreatedByUserId = c.CreatedByUserId;
+            d.SendBlockers = c.Status == CampaignStatus.Draft ? SendBlockers(c) : [];
             d.CreatedByName = names.TryGetValue(c.CreatedByUserId, out var n) ? n.Name : "";
             d.CreatedAt = c.CreatedAt; d.UpdatedAt = c.UpdatedAt; d.SentAt = c.SentAt;
             d.CanEdit = isCreator && c.Status == CampaignStatus.Draft;
-            d.CanSubmit = d.CanEdit;
-            d.CanApprove = v.IsPM && !isCreator && c.Status == CampaignStatus.Pending;
-            d.CanAskChanges = d.CanApprove;
-            d.CanTakeBack = isCreator && c.Status == CampaignStatus.Pending;
-            d.CanSend = isCreator && c.Status == CampaignStatus.Approved;
-            d.Badge = c.Status == CampaignStatus.Draft && !string.IsNullOrWhiteSpace(c.ManagerNote) ? "changes_asked"
-                : d.CanApprove ? "needs_your_approval"
-                : d.CanSend ? "ready_to_send"
-                : null;
+            d.CanSend = d.CanEdit;
             return d;
         }
 
@@ -447,17 +311,5 @@ namespace TeamTrack.Workspace.Services
             }).ToList();
             return d;
         }
-
-        private static readonly CampaignTemplateDto[] TemplateData =
-        [
-            new() { Id = 1, Name = "First introduction", Subject = "Faster medical coding for {client}",
-                Body = "Hi {name},\n\nI'm {me} from Emedlogix. We help teams like {client} code medical records faster and more accurately.\n\nWould you be open to a short call this week?\n\nRegards,\n{me}" },
-            new() { Id = 2, Name = "Follow-up after 5 days", Subject = "Following up on my last mail",
-                Body = "Hi {name},\n\nI wanted to follow up on my earlier note about how Emedlogix can help {client}.\n\nIs there a good time for a quick chat?\n\nRegards,\n{me}" },
-            new() { Id = 3, Name = "Demo invite", Subject = "A 20-minute demo for {client}",
-                Body = "Hi {name},\n\nWe would love to show you a 20-minute demo of our medical coding platform, tailored to {client}.\n\nPlease let me know a time that suits you.\n\nRegards,\n{me}" },
-            new() { Id = 4, Name = "Thank you after demo", Subject = "Thank you for your time",
-                Body = "Hi {name},\n\nThank you for taking the time to see the demo today. It was great to learn more about {client}.\n\nI'll share the next steps shortly. Please reach out with any questions.\n\nRegards,\n{me}" },
-        ];
     }
 }

@@ -51,12 +51,20 @@ namespace TeamTrack.Services
             // WorkItem status count (excluding bugs)
             var workItemStatusCount = new WorkItemStatusCountDto
             {
-                Pending = normalWorkItems.Count(w => w.Status == "pending" || w.Status == "assigned" || w.Status == "reopened"),
-                InProgress = normalWorkItems.Count(w => w.Status == "in_progress" || w.Status == "future_release"),
+                Pending = normalWorkItems.Count(w => w.Status == "pending"),
+                Assigned = normalWorkItems.Count(w => w.Status == "assigned"),
+                InProgress = normalWorkItems.Count(w => w.Status == "in_progress"),
                 Completed = normalWorkItems.Count(w => w.Status == "completed"),
-                Testing = normalWorkItems.Count(w => w.Status == "testing"),
-                BugFound = normalWorkItems.Count(w => w.Status == "bug_found"),
-                Closed = normalWorkItems.Count(w => w.Status == "closed")
+                TestingInProgress = normalWorkItems.Count(w => w.Status == "testing_in_progress"),
+                Bugs = normalWorkItems.Count(w => w.Status == "bugs"),
+                Open = normalWorkItems.Count(w => w.Status == "open"),
+                Fixed = normalWorkItems.Count(w => w.Status == "fixed"),
+                Reopen = normalWorkItems.Count(w => w.Status == "reopen" || w.Status == "reopened"),
+                TestingCompleted = normalWorkItems.Count(w => w.Status == "testing_completed"),
+                Released = normalWorkItems.Count(w => w.Status == "released"),
+                Testing = normalWorkItems.Count(w => w.Status == "testing_in_progress" || w.Status == "testing"),
+                BugFound = normalWorkItems.Count(w => w.Status == "bugs" || w.Status == "bug_found"),
+                Closed = normalWorkItems.Count(w => w.Status == "closed" || w.Status == "released")
             };
 
             // Bug status count (only from Bug entities, since they already sync/include top-level bugs)
@@ -70,7 +78,7 @@ namespace TeamTrack.Services
 
             // Employee-wise workitem count (excluding bugs to match their dashboard)
             var employees = await _userRepo.Query()
-                .Where(u => (u.UserType == "Employee" || u.UserType == "Both") && u.IsActive)
+                .Where(u => (u.UserType == "Employee" || u.UserType == "Marketing" || u.UserType == "Both") && u.IsActive)
                 .ToListAsync();
 
             var allNotes = await _noteRepo.Query()
@@ -91,12 +99,20 @@ namespace TeamTrack.Services
                     EmployeeId = emp.Id,
                     EmployeeName = emp.Name,
                     TotalAssigned = empWorkItems.Count,
-                    Pending = empWorkItems.Count(w => w.Status == "pending" || w.Status == "assigned" || w.Status == "reopened"),
-                    InProgress = empWorkItems.Count(w => w.Status == "in_progress" || w.Status == "future_release"),
+                    Pending = empWorkItems.Count(w => w.Status == "pending"),
+                    Assigned = empWorkItems.Count(w => w.Status == "assigned"),
+                    InProgress = empWorkItems.Count(w => w.Status == "in_progress"),
                     Completed = empWorkItems.Count(w => w.Status == "completed"),
-                    Testing = empWorkItems.Count(w => w.Status == "testing"),
-                    BugFound = empWorkItems.Count(w => w.Status == "bug_found"),
-                    Closed = empWorkItems.Count(w => w.Status == "closed"),
+                    TestingInProgress = empWorkItems.Count(w => w.Status == "testing_in_progress"),
+                    Bugs = empWorkItems.Count(w => w.Status == "bugs"),
+                    Open = empWorkItems.Count(w => w.Status == "open"),
+                    Fixed = empWorkItems.Count(w => w.Status == "fixed"),
+                    Reopen = empWorkItems.Count(w => w.Status == "reopen" || w.Status == "reopened"),
+                    TestingCompleted = empWorkItems.Count(w => w.Status == "testing_completed"),
+                    Released = empWorkItems.Count(w => w.Status == "released"),
+                    Testing = empWorkItems.Count(w => w.Status == "testing_in_progress" || w.Status == "testing"),
+                    BugFound = empWorkItems.Count(w => w.Status == "bugs" || w.Status == "bug_found"),
+                    Closed = empWorkItems.Count(w => w.Status == "closed" || w.Status == "released"),
                     AssignedTasks = empWorkItems.Select(w => new EmployeeTaskDto
                     {
                         Id = w.Id,
@@ -139,7 +155,7 @@ namespace TeamTrack.Services
             // Total counts (unfiltered)
             var totalProjects = await _projectRepo.Query().CountAsync();
             var totalEmployees = await _userRepo.Query()
-                .Where(u => (u.UserType == "Employee" || u.UserType == "Both") && u.IsActive)
+                .Where(u => (u.UserType == "Employee" || u.UserType == "Marketing" || u.UserType == "Both") && u.IsActive)
                 .CountAsync();
 
             // Build filtered WorkItems query
@@ -169,18 +185,22 @@ namespace TeamTrack.Services
             var bugItems = allItems.Where(w => w.WorkType != null && w.WorkType.Equals("Bug", StringComparison.OrdinalIgnoreCase)).ToList();
             var taskItems = allItems.Where(w => w.WorkType == null || !w.WorkType.Equals("Bug", StringComparison.OrdinalIgnoreCase)).ToList();
 
-            // Status counts (all items — tasks + bugs combined)
+            // Status counts (all items â€” tasks + bugs combined)
             var statusCounts = new AdminStatusCountDto
             {
                 Todo = allItems.Count(w => w.Status == "pending"),
                 Assigned = allItems.Count(w => w.Status == "assigned"),
-                Reopen = allItems.Count(w => w.Status == "reopened"),
+                Reopen = allItems.Count(w => w.Status == "reopen" || w.Status == "reopened"),
                 InProgress = allItems.Count(w => w.Status == "in_progress"),
                 FutureRelease = allItems.Count(w => w.Status == "future_release"),
                 Fixed = allItems.Count(w => w.Status == "fixed"),
                 Completed = allItems.Count(w => w.Status == "completed"),
                 Closed = allItems.Count(w => w.Status == "closed"),
-                Open = allItems.Count(w => w.Status == "open")
+                Open = allItems.Count(w => w.Status == "open"),
+                TestingInProgress = allItems.Count(w => w.Status == "testing_in_progress"),
+                Bugs = allItems.Count(w => w.Status == "bugs"),
+                TestingCompleted = allItems.Count(w => w.Status == "testing_completed"),
+                Released = allItems.Count(w => w.Status == "released")
             };
 
             // Employee breakdown
@@ -200,13 +220,17 @@ namespace TeamTrack.Services
                     TotalAssigned = items.Count,
                     Todo = items.Count(w => w.Status == "pending"),
                     Assigned = items.Count(w => w.Status == "assigned"),
-                    Reopen = items.Count(w => w.Status == "reopened"),
+                    Reopen = items.Count(w => w.Status == "reopen" || w.Status == "reopened"),
                     InProgress = items.Count(w => w.Status == "in_progress"),
                     FutureRelease = items.Count(w => w.Status == "future_release"),
                     Fixed = items.Count(w => w.Status == "fixed"),
                     Completed = items.Count(w => w.Status == "completed"),
                     Closed = items.Count(w => w.Status == "closed"),
-                    Open = items.Count(w => w.Status == "open")
+                    Open = items.Count(w => w.Status == "open"),
+                    TestingInProgress = items.Count(w => w.Status == "testing_in_progress"),
+                    Bugs = items.Count(w => w.Status == "bugs"),
+                    TestingCompleted = items.Count(w => w.Status == "testing_completed"),
+                    Released = items.Count(w => w.Status == "released")
                 });
             }
 
@@ -247,13 +271,17 @@ namespace TeamTrack.Services
             {
                 Todo = workItems.Count(w => w.Status == "pending"),
                 Assigned = workItems.Count(w => w.Status == "assigned"),
-                Reopen = workItems.Count(w => w.Status == "reopened"),
+                Reopen = workItems.Count(w => w.Status == "reopen" || w.Status == "reopened"),
                 InProgress = workItems.Count(w => w.Status == "in_progress"),
                 FutureRelease = workItems.Count(w => w.Status == "future_release"),
                 Fixed = workItems.Count(w => w.Status == "fixed"),
                 Completed = workItems.Count(w => w.Status == "completed"),
                 Closed = workItems.Count(w => w.Status == "closed"),
-                Open = workItems.Count(w => w.Status == "open")
+                Open = workItems.Count(w => w.Status == "open"),
+                TestingInProgress = workItems.Count(w => w.Status == "testing_in_progress"),
+                Bugs = workItems.Count(w => w.Status == "bugs"),
+                TestingCompleted = workItems.Count(w => w.Status == "testing_completed"),
+                Released = workItems.Count(w => w.Status == "released")
             };
 
             // Only projects assigned to this employee (for dropdown)
@@ -281,7 +309,7 @@ namespace TeamTrack.Services
         public async Task<byte[]> ExportAdminCsvAsync(int? projectId, int? employeeId, DateTime? fromDate, DateTime? toDate, string? status, string? priority, string? workType, int? moduleId, int? clientId, string? raisedBuild, string? fixedBuild, string? columns)
         {
             var query = BuildExportQuery(projectId, employeeId, fromDate, toDate, status, priority, workType, moduleId, clientId, raisedBuild, fixedBuild);
-            var workItems = await query.OrderBy(w => w.ProjectId).ThenBy(w => w.CreatedAt).ToListAsync();
+            var workItems = await query.OrderByDescending(w => w.CreatedAt).ToListAsync();
             return GenerateCsv(workItems, columns);
         }
 
@@ -294,9 +322,9 @@ namespace TeamTrack.Services
                 .ToListAsync();
 
             var query = BuildExportQuery(projectId, null, fromDate, toDate, status, priority, workType, moduleId, clientId, raisedBuild, fixedBuild);
-            query = query.Where(w => memberProjectIds.Contains(w.ProjectId));
+            query = query.Where(w => w.ProjectId.HasValue && memberProjectIds.Contains(w.ProjectId.Value));
 
-            var workItems = await query.OrderBy(w => w.ProjectId).ThenBy(w => w.CreatedAt).ToListAsync();
+            var workItems = await query.OrderByDescending(w => w.CreatedAt).ToListAsync();
             return GenerateCsv(workItems, columns);
         }
 
@@ -413,15 +441,23 @@ namespace TeamTrack.Services
 
         private static readonly Dictionary<string, string> StatusLabelMap = new(StringComparer.OrdinalIgnoreCase)
         {
-            { "pending", "Open" },
-            { "assigned", "Assigned" },
-            { "reopened", "Reopen" },
-            { "in_progress", "In Progress" },
-            { "future_release", "Moved to future release" },
-            { "fixed", "Fixed" },
-            { "completed", "Resolved" },
-            { "closed", "Closed" },
-            { "open", "Open" }
+            // Labels match the UI (Work Items status dropdown / filter)
+            { "pending", "TO DO" },
+            { "assigned", "ASSIGNED" },
+            { "reopened", "REOPEN" },
+            { "reopen", "REOPEN" },
+            { "in_progress", "IN PROGRESS" },
+            { "future_release", "MOVED TO FUTURE RELEASE" },
+            { "fixed", "FIXED" },
+            { "completed", "RESOLVED" },
+            { "waiting_customer", "WAITING FOR CUSTOMER" },
+            { "testing_in_progress", "TESTING IN PROGRESS" },
+            { "testing_completed", "TESTING COMPLETED" },
+            { "bugs", "BUGS" },
+            { "open", "OPEN" },
+            { "new", "NEW" },
+            { "released", "RELEASED" },
+            { "closed", "CLOSED" }
         };
 
         private static string GetStatusLabel(string? status)
@@ -439,16 +475,23 @@ namespace TeamTrack.Services
         }
 
 
-        // Status ordering: UnAssigned(pending)=0, Assigned=1, Reopen=2, Fixed=3, Resolved(completed)=4, FutureRelease=5, rest=6
-        private static int GetStatusOrder(string? status) => status switch
+        // Status ordering matching the 11-step lifecycle workflow
+        private static int GetStatusOrder(string? status) => status?.ToLower() switch
         {
             "pending" => 0,
             "assigned" => 1,
-            "reopened" => 2,
-            "fixed" => 3,
-            "completed" => 4,
-            "future_release" => 5,
-            _ => 6
+            "in_progress" => 2,
+            "completed" => 3,
+            "testing_in_progress" => 4,
+            "bugs" => 5,
+            "open" => 6,
+            "fixed" => 7,
+            "reopen" or "reopened" => 8,
+            "testing_completed" => 9,
+            "released" => 10,
+            "future_release" => 11,
+            "closed" => 12,
+            _ => 13
         };
 
         public async Task<PagedResult<WorkItemResponseDto>> GetAdminWorkItemsAsync(int? projectId, string tab, int page, int pageSize)
@@ -464,17 +507,16 @@ namespace TeamTrack.Services
                 query = query.Where(w => w.ProjectId == projectId.Value);
 
             if (tab == "open")
-                query = query.Where(w => w.Status == "pending" || w.Status == "assigned" || w.Status == "reopened" || w.Status == "future_release");
+                query = query.Where(w => w.Status != "released" && w.Status != "closed" && w.Status != "testing_completed");
             else if (tab == "closed")
-                query = query.Where(w => w.Status == "fixed" || w.Status == "completed");
+                query = query.Where(w => w.Status == "fixed" || w.Status == "completed" || w.Status == "testing_completed" || w.Status == "released" || w.Status == "closed");
 
             var totalCount = await query.CountAsync();
 
             // Load all for sorting by custom status order, then paginate
             var allItems = await query.ToListAsync();
             var pagedItems = allItems
-                .OrderBy(w => GetStatusOrder(w.Status))
-                .ThenByDescending(w => w.CreatedAt)
+                .OrderByDescending(w => w.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToList();
@@ -522,6 +564,7 @@ namespace TeamTrack.Services
                     ClientId = w.Project?.ClientId,
                     ClientName = w.Project?.Client?.Name,
                     CreatedAt = w.CreatedAt,
+                    UpdatedAt = w.UpdatedAt,
                     DueDate = w.DueDate,
                     AssignedToUserId = w.AssignedToUserId,
                     FixedBillNumber = w.FixedBillNumber,
@@ -574,7 +617,7 @@ namespace TeamTrack.Services
                 .Include(w => w.AssignedTo)
                 .Include(w => w.CreatedBy)
                 .Include(w => w.Module).ThenInclude(m => m.Product)
-                .Where(w => memberProjectIds.Contains(w.ProjectId));
+                .Where(w => w.ProjectId.HasValue && memberProjectIds.Contains(w.ProjectId.Value));
 
             if (projectId.HasValue)
                 query = query.Where(w => w.ProjectId == projectId.Value);
@@ -610,8 +653,7 @@ namespace TeamTrack.Services
 
             var allItems = await query.ToListAsync();
             var pagedItems = allItems
-                .OrderBy(w => GetStatusOrder(w.Status))
-                .ThenByDescending(w => w.CreatedAt)
+                .OrderByDescending(w => w.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToList();
@@ -655,6 +697,7 @@ namespace TeamTrack.Services
                     ClientId = w.Project?.ClientId,
                     ClientName = w.Project?.Client?.Name,
                     CreatedAt = w.CreatedAt,
+                    UpdatedAt = w.UpdatedAt,
                     DueDate = w.DueDate,
                     AssignedToUserId = w.AssignedToUserId,
                     FixedBillNumber = w.FixedBillNumber,

@@ -57,7 +57,7 @@ namespace TeamTrack.Controllers
             if (string.IsNullOrEmpty(request.TargetRole))
                 return BadRequest(ApiResponse<string>.FailureResponse("Target role is required"));
 
-            if (request.TargetRole != "Employee" && request.TargetRole != "ProductManager")
+            if (request.TargetRole != "Employee" && request.TargetRole != "ProductManager" && request.TargetRole != "Marketing")
                 return BadRequest(ApiResponse<string>.FailureResponse("Invalid target role"));
 
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
@@ -106,7 +106,7 @@ namespace TeamTrack.Controllers
                 string.IsNullOrEmpty(request.Password))
                 return BadRequest(ApiResponse<string>.FailureResponse("Name, Email and Password are required"));
 
-            if (request.UserType != "Employee" && request.UserType != "ProductManager" && request.UserType != "Both")
+            if (request.UserType != "Employee" && request.UserType != "ProductManager" && request.UserType != "Marketing" && request.UserType != "Both")
             {
                 return BadRequest(ApiResponse<string>.FailureResponse("Invalid UserType role selected"));
             }

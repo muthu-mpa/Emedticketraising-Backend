@@ -34,12 +34,8 @@ namespace TeamTrack.Tests
     public class SendClaimTests
     {
         private static async Task<CampaignDetailDto> ApprovedAsync(Kit k)
-        {
-            var c = Ok(await k.Campaigns.CreateAsync(k.Asha, new CampaignInput
+            => Ok(await k.Campaigns.CreateAsync(k.Asha, new CampaignInput
             { Title = "T", ClientName = "C", ContactName = "N", ClientEmail = "n@c.example", Subject = "S", Body = "B" }));
-            Ok(await k.Campaigns.SubmitAsync(k.Asha, c.Id));
-            return Ok(await k.Campaigns.ApproveAsync(k.Priya, c.Id));
-        }
 
         private static async Task<string> StatusAsync(Kit k, int id)
         {
@@ -57,7 +53,7 @@ namespace TeamTrack.Tests
 
             Assert.True(await first.TryClaimAsync(c.Id));
             Assert.Equal("sending", await StatusAsync(k, c.Id));
-            Assert.False(await second.TryClaimAsync(c.Id)); // nothing matched WHERE status = 'approved'
+            Assert.False(await second.TryClaimAsync(c.Id)); // nothing matched WHERE status = 'draft'
             Assert.False(await first.TryClaimAsync(c.Id));
             Assert.False(await first.TryClaimAsync(12345));
         }
@@ -99,19 +95,15 @@ namespace TeamTrack.Tests
             var view = Ok(await web.GetAsync(k.Asha, c.Id));
             Assert.Equal("sending", view.Status);
             Assert.False(view.CanSend);
-            Assert.False(view.CanEdit || view.CanTakeBack || view.CanApprove);
-            Assert.Null(view.Badge);
+            Assert.False(view.CanEdit);
 
             Fails(await web.SendAsync(k.Asha, c.Id, true), 409, "already being sent");
-            Fails(await web.TakeBackAsync(k.Asha, c.Id), 409);
-            Fails(await web.ApproveAsync(k.Ravi, c.Id), 409);
-            Fails(await web.AskChangesAsync(k.Ravi, c.Id, "x"), 409);
             Fails(await web.UpdateAsync(k.Asha, c.Id, new CampaignInput { Title = "x" }), 409);
 
             var list = Ok(await web.ListAsync(k.Asha, "sending", false, null));
             Assert.Equal(c.Id, Assert.Single(list.Items).Id);
             Assert.Equal(1, list.Counts["sending"]);
-            Assert.Equal(0, list.Counts["approved"]);
+            Assert.Equal(0, list.Counts["draft"]);
         }
 
         [Fact]
@@ -126,7 +118,7 @@ namespace TeamTrack.Tests
 
             failing.Release();
             Fails(await request, 502, "mailbox full");
-            Assert.Equal("approved", await StatusAsync(k, c.Id));
+            Assert.Equal("draft", await StatusAsync(k, c.Id));
 
             var detail = Ok(await k.Campaigns.GetAsync(k.Asha, c.Id));
             Assert.Contains("mailbox full", Assert.Single(detail.History, h => h.Action == "Send failed").Note);
@@ -143,7 +135,7 @@ namespace TeamTrack.Tests
             var c = await ApprovedAsync(k);
             Fails(await k.Campaigns.SendAsync(k.Asha, c.Id, confirm: false), 400, "confirm");
             Fails(await k.Campaigns.SendAsync(k.Ben, c.Id, true), 403);
-            Assert.Equal("approved", await StatusAsync(k, c.Id));
+            Assert.Equal("draft", await StatusAsync(k, c.Id));
         }
     }
 

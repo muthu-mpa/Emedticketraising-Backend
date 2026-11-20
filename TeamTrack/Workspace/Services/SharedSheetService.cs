@@ -22,8 +22,6 @@ namespace TeamTrack.Workspace.Services
         Task<WsResult<SheetFileDto>> DownloadAsync(CurrentUser user, int id);
         Task<WsResult<List<SheetHistoryDto>>> HistoryAsync(CurrentUser user, int id);
         Task<WsResult<bool>> DeleteAsync(CurrentUser user, int id);
-        /// <summary>Runs the campaign import preview on the sheet's current content.</summary>
-        Task<WsResult<ImportPreviewDto>> ImportPreviewAsync(CurrentUser user, int id);
     }
 
     public class SharedSheetService : ISharedSheetService
@@ -41,17 +39,15 @@ namespace TeamTrack.Workspace.Services
         private readonly AppDbContext _app;
         private readonly INotificationService _notifications;
         private readonly ISheetFileStore _files;
-        private readonly ICampaignImportService _imports;
         private readonly ILogger<SharedSheetService> _logger;
 
         public SharedSheetService(WorkspaceDbContext db, AppDbContext app, INotificationService notifications,
-            ISheetFileStore files, ICampaignImportService imports, ILogger<SharedSheetService> logger)
+            ISheetFileStore files, ILogger<SharedSheetService> logger)
         {
             _db = db;
             _app = app;
             _notifications = notifications;
             _files = files;
-            _imports = imports;
             _logger = logger;
         }
 
@@ -384,14 +380,6 @@ namespace TeamTrack.Workspace.Services
 
             _files.Delete(sheet.OriginalFilePath);
             return WsResult<bool>.Ok(true, "Sheet deleted.");
-        }
-
-        public async Task<WsResult<ImportPreviewDto>> ImportPreviewAsync(CurrentUser user, int id)
-        {
-            var sheet = await _db.SharedSheets.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id);
-            if (sheet == null) return NotFound<ImportPreviewDto>();
-            if (!(await AccessAsync(user, sheet.Id, sheet.OwnerId)).CanView) return NoAccess<ImportPreviewDto>();
-            return await _imports.PreviewBookAsync(user, $"{sheet.Title} (shared sheet #{sheet.Id})", SheetBook.FromJson(sheet.Data));
         }
 
         // ---------- helpers ----------

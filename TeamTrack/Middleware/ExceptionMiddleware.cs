@@ -46,7 +46,10 @@ namespace TeamTrack.Middleware
             var fullMessage = string.Join(" -> ", messages.Distinct());
 
             var response = ApiResponse<string>.FailureResponse(fullMessage);
-            var json = JsonSerializer.Serialize(response);
+            var json = JsonSerializer.Serialize(response, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
             await context.Response.WriteAsync(json);
         }
     }

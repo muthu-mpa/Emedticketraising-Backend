@@ -268,9 +268,6 @@ namespace TeamTrack.Tests
         public async Task Pm_home_lists_pending_items_from_others_only()
         {
             var k = new Kit();
-            var mail = Ok(await k.Campaigns.CreateAsync(k.Asha, new CampaignInput
-            { Title = "T", ClientName = "C", ContactName = "N", ClientEmail = "n@c.example", Subject = "S", Body = "B" }));
-            Ok(await k.Campaigns.SubmitAsync(k.Asha, mail.Id));
             Ok(await k.TimeOff.RequestLeaveAsync(k.Asha, new LeaveRequestInput
             { LeaveType = "casual", FromDate = new(2026, 12, 1), ToDate = new(2026, 12, 1), Reason = "x" }));
             Ok(await k.TimeOff.RequestLeaveAsync(k.Priya, new LeaveRequestInput
@@ -281,14 +278,11 @@ namespace TeamTrack.Tests
 
             var home = Ok(await k.Home.GetAsync(k.Priya));
             Assert.Equal("ProductManager", home.Role);
-            Assert.Equal(1, home.Tiles["mailsWaitingApproval"]);
             Assert.Equal(1, home.Tiles["timeOffWaiting"]); // Priya's own leave is for Ravi to decide
             Assert.Equal(1, home.Tiles["mailsSentThisMonth"]);
             Assert.Equal(0, home.Tiles["peopleAwayToday"]);
-            Assert.Equal(2, home.Todo.Count);
-            Assert.StartsWith("Approve mail:", home.Todo[0].Label);
-            Assert.Equal($"/workspace/campaigns/{mail.Id}", home.Todo[0].Link);
-            Assert.Equal("time_off", home.Todo[1].Kind);
+            Assert.Equal(1, home.Todo.Count);
+            Assert.Equal("time_off", home.Todo[0].Kind);
         }
 
         [Fact]
@@ -298,14 +292,7 @@ namespace TeamTrack.Tests
             CampaignInput Input(string title) => new() { Title = title, ClientName = "C", ContactName = "N", ClientEmail = "n@c.example", Subject = "S", Body = "B" };
 
             var plainDraft = Ok(await k.Campaigns.CreateAsync(k.Asha, Input("Plain draft")));
-            var pending = Ok(await k.Campaigns.CreateAsync(k.Asha, Input("Pending one")));
-            Ok(await k.Campaigns.SubmitAsync(k.Asha, pending.Id));
-            var changes = Ok(await k.Campaigns.CreateAsync(k.Asha, Input("Needs fixing")));
-            Ok(await k.Campaigns.SubmitAsync(k.Asha, changes.Id));
-            Ok(await k.Campaigns.AskChangesAsync(k.Priya, changes.Id, "fix"));
-            var approved = Ok(await k.Campaigns.CreateAsync(k.Asha, Input("Ready")));
-            Ok(await k.Campaigns.SubmitAsync(k.Asha, approved.Id));
-            Ok(await k.Campaigns.ApproveAsync(k.Priya, approved.Id));
+            Ok(await k.Campaigns.CreateAsync(k.Asha, Input("Second draft")));
             var leave = Ok(await k.TimeOff.RequestLeaveAsync(k.Asha, new LeaveRequestInput
             { LeaveType = "casual", FromDate = new(2026, 12, 1), ToDate = new(2026, 12, 2), Reason = "x" }));
             Ok(await k.TimeOff.ApproveAsync(k.Priya, leave.Id));
@@ -316,10 +303,9 @@ namespace TeamTrack.Tests
             Assert.Equal("Employee", home.Role);
             Assert.Equal(10, home.Tiles["casualLeaveLeft"]);
             Assert.Equal(3, home.Tiles["permissionHoursLeft"]);
-            Assert.Equal(1, home.Tiles["myWaitingApproval"]);
             Assert.Equal(0, home.Tiles["mySentThisMonth"]);
             Assert.Equal(
-                ["Send mail: Ready", "Fix and resend: Needs fixing", "Finish draft: Plain draft", "Waiting for approval: Pending one"],
+                ["Finish draft: Plain draft", "Finish draft: Second draft"],
                 home.Todo.Select(t => t.Label));
             Assert.NotEqual(0, perm.Id + plainDraft.Id);
         }

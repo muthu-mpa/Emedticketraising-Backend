@@ -39,6 +39,16 @@ namespace TeamTrack.Services
         Task<ProjectResponseDto?> UpdateProjectAsync(int projectId, UpdateProjectRequestDto request);
         Task<List<WorkItemActivityLogDto>> GetWorkItemActivityAsync(int workItemId);
         Task<List<WorkItemResponseDto>> GetInvolvedWorkItemsAsync(int userId);
+
+        // Client Modules
+        Task<List<ClientModuleDto>> GetClientModulesByClientAsync(int clientId);
+        Task<ClientModuleDto> CreateClientModuleAsync(CreateClientModuleRequestDto request);
+        Task<ClientModuleDto?> UpdateClientModuleAsync(int clientModuleId, UpdateClientModuleRequestDto request);
+        Task<bool> DeleteClientModuleAsync(int clientModuleId);
+
+        // Parent-based WorkItem fetching (Structure A: Module / Structure B: Client Module)
+        Task<List<WorkItemResponseDto>> GetWorkItemsByParentAsync(int? moduleId, int? clientModuleId, int? productId, int userId, string userRole);
+        Task<PagedResult<WorkItemResponseDto>> GetWorkItemsByParentPagedAsync(int? moduleId, int? clientModuleId, int? productId, int page, int pageSize, string? status, string? search, string? assignedTo = null, string? dueDate = null);
     }
 }
 

@@ -151,7 +151,7 @@ namespace TeamTrack.Services
                 .Include(b => b.RaisedBy)
                 .Include(b => b.AssignedTo)
                 .Where(b => b.WorkItemId == workItemId)
-                .OrderBy(b => b.CreatedAt)
+                .OrderByDescending(b => b.CreatedAt)
                 .ToListAsync();
 
             return bugs.Select(MapToDto).ToList();
@@ -164,7 +164,7 @@ namespace TeamTrack.Services
                 .Include(b => b.RaisedBy)
                 .Include(b => b.AssignedTo)
                 .Where(b => b.AssignedToUserId == userId)
-                .OrderBy(b => b.CreatedAt)
+                .OrderByDescending(b => b.CreatedAt)
                 .ToListAsync();
 
             return bugs.Select(MapToDto).ToList();
@@ -197,7 +197,7 @@ namespace TeamTrack.Services
 
             var totalCount = await query.CountAsync();
             var items = await query
-                .OrderBy(b => b.CreatedAt)
+                .OrderByDescending(b => b.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -217,7 +217,7 @@ namespace TeamTrack.Services
                 .Include(b => b.WorkItem)
                 .Include(b => b.RaisedBy)
                 .Include(b => b.AssignedTo)
-                .OrderBy(b => b.CreatedAt)
+                .OrderByDescending(b => b.CreatedAt)
                 .ToListAsync();
 
             return bugs.Select(MapToDto).ToList();
@@ -249,7 +249,7 @@ namespace TeamTrack.Services
 
             var totalCount = await query.CountAsync();
             var items = await query
-                .OrderBy(b => b.CreatedAt)
+                .OrderByDescending(b => b.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -320,7 +320,11 @@ namespace TeamTrack.Services
             var bug = await _bugRepo.GetAsync(b => b.Id == bugId);
             if (bug == null) return null;
 
-            bug.AssignedToUserId = request.AssignedToUserId;
+            var newAssigneeId = (request.AssignedToUserId.HasValue && request.AssignedToUserId.Value > 0)
+                ? request.AssignedToUserId
+                : null;
+
+            bug.AssignedToUserId = newAssigneeId;
             bug.UpdatedAt = DateTime.UtcNow;
 
             await _bugRepo.SaveAsync();
@@ -329,7 +333,7 @@ namespace TeamTrack.Services
             var workItem = await _workItemRepo.GetAsync(w => w.Id == bug.WorkItemId);
             if (workItem != null)
             {
-                workItem.AssignedToUserId = request.AssignedToUserId;
+                workItem.AssignedToUserId = newAssigneeId;
                 workItem.UpdatedAt = DateTime.UtcNow;
                 await _workItemRepo.SaveAsync();
             }

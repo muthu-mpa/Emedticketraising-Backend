@@ -95,7 +95,6 @@ namespace TeamTrack.Tests
         public FakeEmail Email { get; } = new();
         public FakeFiles Files { get; } = new();
         public FakeSheetFiles SheetFiles { get; } = new();
-        public IMemoryCache Cache { get; } = new MemoryCache(new MemoryCacheOptions());
 
         public INotificationService Notifications { get; }
         public ICampaignService Campaigns { get; }
@@ -103,7 +102,6 @@ namespace TeamTrack.Tests
         public IWorkspaceProjectService Projects { get; }
         public IPeopleService People { get; }
         public IWorkspaceHomeService Home { get; }
-        public ICampaignImportService Imports { get; }
         public ISharedSheetService Sheets { get; }
 
         public Kit(string? companyAddress = "12 Test Street, Chennai")
@@ -131,8 +129,7 @@ namespace TeamTrack.Tests
             Projects = new WorkspaceProjectService(Ws, App, Files);
             People = new PeopleService(App);
             Home = new WorkspaceHomeService(Ws, App, TimeOff, Projects, Clock);
-            Imports = new CampaignImportService(Ws, App, Cache);
-            Sheets = new SharedSheetService(Ws, App, Notifications, SheetFiles, Imports, NullLogger<SharedSheetService>.Instance);
+            Sheets = new SharedSheetService(Ws, App, Notifications, SheetFiles, NullLogger<SharedSheetService>.Instance);
         }
 
         public WorkspaceDbContext NewWorkspaceContext()

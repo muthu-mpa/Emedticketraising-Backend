@@ -1,4 +1,4 @@
-﻿namespace TeamTrack.DTOs
+namespace TeamTrack.DTOs
 {
     public class DashboardResponseDto
     {
@@ -14,8 +14,16 @@
     public class WorkItemStatusCountDto
     {
         public int Pending { get; set; }
+        public int Assigned { get; set; }
         public int InProgress { get; set; }
         public int Completed { get; set; }
+        public int TestingInProgress { get; set; }
+        public int Bugs { get; set; }
+        public int Open { get; set; }
+        public int Fixed { get; set; }
+        public int Reopen { get; set; }
+        public int TestingCompleted { get; set; }
+        public int Released { get; set; }
         public int Testing { get; set; }
         public int BugFound { get; set; }
         public int Closed { get; set; }
@@ -35,8 +43,16 @@
         public string EmployeeName { get; set; } = string.Empty;
         public int TotalAssigned { get; set; }
         public int Pending { get; set; }
+        public int Assigned { get; set; }
         public int InProgress { get; set; }
         public int Completed { get; set; }
+        public int TestingInProgress { get; set; }
+        public int Bugs { get; set; }
+        public int Open { get; set; }
+        public int Fixed { get; set; }
+        public int Reopen { get; set; }
+        public int TestingCompleted { get; set; }
+        public int Released { get; set; }
         public int Testing { get; set; }
         public int BugFound { get; set; }
         public int Closed { get; set; }
@@ -53,7 +69,7 @@
         public string Title { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;
         public string Priority { get; set; } = string.Empty;
-        public int ProjectId { get; set; }
+        public int? ProjectId { get; set; }
         public string ProjectName { get; set; } = string.Empty;
         public string? ClientName { get; set; }
         public string? ProductName { get; set; }
@@ -90,6 +106,10 @@
         public int Completed { get; set; }
         public int Closed { get; set; }
         public int Open { get; set; }
+        public int TestingInProgress { get; set; }
+        public int Bugs { get; set; }
+        public int TestingCompleted { get; set; }
+        public int Released { get; set; }
     }
 
     public class AdminEmployeeBreakdownDto
@@ -106,6 +126,10 @@
         public int Completed { get; set; }
         public int Closed { get; set; }
         public int Open { get; set; }
+        public int TestingInProgress { get; set; }
+        public int Bugs { get; set; }
+        public int TestingCompleted { get; set; }
+        public int Released { get; set; }
     }
 
     // ── Employee Dashboard ──
@@ -119,7 +143,7 @@
 
     public class EmployeeProjectDto
     {
-        public int ProjectId { get; set; }
+        public int? ProjectId { get; set; }
         public string ProjectName { get; set; } = "";
     }
 

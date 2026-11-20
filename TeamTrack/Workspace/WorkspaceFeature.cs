@@ -24,8 +24,6 @@ namespace TeamTrack.Workspace
             services.AddScoped<IDocumentFileService, DocumentFileService>();
             services.AddScoped<IWorkspaceProjectService, WorkspaceProjectService>();
             services.AddScoped<IWorkspaceHomeService, WorkspaceHomeService>();
-            services.AddMemoryCache(); // import previews wait here until the commit call
-            services.AddScoped<ICampaignImportService, CampaignImportService>();
             services.AddSingleton<ISheetFileStore, SheetFileStore>();
             services.AddScoped<ISharedSheetService, SharedSheetService>();
             return services;

@@ -14,8 +14,19 @@ namespace TeamTrack.Services
         private readonly IRepository<WorkItemActivityLog> _activityRepo;
         private readonly IRepository<Product> _productRepo;
         private readonly IRepository<Module> _moduleRepo;
+        private readonly IRepository<Client> _clientRepo;
+        private readonly IRepository<ClientModule> _clientModuleRepo;
 
-        public ProjectService(IRepository<Project> projectRepo, IRepository<WorkItem> workItemRepo, IRepository<User> userRepo, IRepository<Bug> bugRepo, IRepository<WorkItemActivityLog> activityRepo, IRepository<Product> productRepo, IRepository<Module> moduleRepo)
+        public ProjectService(
+            IRepository<Project> projectRepo,
+            IRepository<WorkItem> workItemRepo,
+            IRepository<User> userRepo,
+            IRepository<Bug> bugRepo,
+            IRepository<WorkItemActivityLog> activityRepo,
+            IRepository<Product> productRepo,
+            IRepository<Module> moduleRepo,
+            IRepository<Client> clientRepo,
+            IRepository<ClientModule> clientModuleRepo)
         {
             _projectRepo = projectRepo;
             _workItemRepo = workItemRepo;
@@ -24,6 +35,8 @@ namespace TeamTrack.Services
             _activityRepo = activityRepo;
             _productRepo = productRepo;
             _moduleRepo = moduleRepo;
+            _clientRepo = clientRepo;
+            _clientModuleRepo = clientModuleRepo;
         }
 
         public async Task<ProjectResponseDto> CreateProjectAsync(CreateProjectRequestDto request, int userId)
@@ -139,7 +152,7 @@ namespace TeamTrack.Services
             var totalCount = await query.CountAsync();
 
             var items = await query
-                .OrderBy(p => p.CreatedAt)
+                .OrderByDescending(p => p.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -165,28 +178,42 @@ namespace TeamTrack.Services
                     .ThenInclude(w => w.CreatedBy)
                 .FirstOrDefaultAsync(p => p.Id == projectId);
 
+            if (project == null)
+            {
+                var product = await _productRepo.Query().FirstOrDefaultAsync(pr => pr.Id == projectId);
+                if (product != null && product.ProjectId.HasValue && product.ProjectId.Value > 0)
+                {
+                    return await GetProjectByIdAsync(product.ProjectId.Value);
+                }
+            }
+
             if (project == null) return null;
             return MapProjectToDto(project);
         }
 
         public async Task<WorkItemResponseDto> CreateWorkItemAsync(int projectId, CreateWorkItemRequestDto request, int userId)
         {
-            var project = await _projectRepo.Query().FirstOrDefaultAsync(p => p.Id == projectId);
-            if (project == null)
+            Project? project = null;
+            if (projectId > 0)
             {
-                throw new Exception("Project not found.");
+                project = await _projectRepo.Query().FirstOrDefaultAsync(p => p.Id == projectId);
             }
-            var prefix = string.IsNullOrWhiteSpace(project.ProjectNumber) ? "WRK" : project.ProjectNumber;
-
-            var isBug = request.WorkType != null && request.WorkType.ToLower() == "bug";
-            var prefixPattern = isBug ? $"{prefix}-BUG-" : $"{prefix}-";
 
             // Sanitize Foreign Keys to prevent FK constraint violations
             int? validModuleId = request.ModuleId;
+            Module? linkedModule = null;
             if (validModuleId.HasValue && validModuleId.Value > 0)
             {
-                var moduleExists = await _moduleRepo.Query().AnyAsync(m => m.Id == validModuleId.Value);
-                if (!moduleExists) validModuleId = null;
+                linkedModule = await _moduleRepo.Query().Include(m => m.Product).FirstOrDefaultAsync(m => m.Id == validModuleId.Value);
+                if (linkedModule == null) validModuleId = null;
+            }
+
+            int? validClientModuleId = request.ClientModuleId;
+            ClientModule? linkedClientModule = null;
+            if (validClientModuleId.HasValue && validClientModuleId.Value > 0)
+            {
+                linkedClientModule = await _clientModuleRepo.Query().Include(cm => cm.Client).ThenInclude(c => c.Product).FirstOrDefaultAsync(cm => cm.Id == validClientModuleId.Value);
+                if (linkedClientModule == null) validClientModuleId = null;
             }
 
             int? validAssignedToUserId = request.AssignedToUserId;
@@ -195,6 +222,40 @@ namespace TeamTrack.Services
                 var userExists = await _userRepo.Query().AnyAsync(u => u.Id == validAssignedToUserId.Value);
                 if (!userExists) validAssignedToUserId = null;
             }
+
+            // Determine prefix from Project or Product
+            string prefix;
+            if (project != null && !string.IsNullOrWhiteSpace(project.ProjectNumber))
+            {
+                prefix = project.ProjectNumber;
+            }
+            else if (linkedModule?.Product != null && !string.IsNullOrWhiteSpace(linkedModule.Product.ProductNumber))
+            {
+                prefix = linkedModule.Product.ProductNumber;
+            }
+            else if (linkedClientModule?.Client?.Product != null && !string.IsNullOrWhiteSpace(linkedClientModule.Client.Product.ProductNumber))
+            {
+                prefix = linkedClientModule.Client.Product.ProductNumber;
+            }
+            else if (request.ProductId.HasValue && request.ProductId.Value > 0)
+            {
+                var prod = await _productRepo.Query().FirstOrDefaultAsync(p => p.Id == request.ProductId.Value);
+                prefix = !string.IsNullOrWhiteSpace(prod?.ProductNumber) ? prod.ProductNumber : "WRK";
+            }
+            else
+            {
+                prefix = "WRK";
+            }
+
+            int? resolvedProjectId = project?.Id;
+            if (!resolvedProjectId.HasValue)
+            {
+                if (linkedModule?.Product?.ProjectId.HasValue == true) resolvedProjectId = linkedModule.Product.ProjectId;
+                else if (linkedClientModule?.Client?.Product?.ProjectId.HasValue == true) resolvedProjectId = linkedClientModule.Client.Product.ProjectId;
+            }
+
+            var isBug = request.WorkType != null && request.WorkType.ToLower() == "bug";
+            var prefixPattern = isBug ? $"{prefix}-BUG-" : $"{prefix}-";
 
             // Query existing work numbers globally across all projects starting with prefix
             var existingNumbers = await _workItemRepo.Query()
@@ -231,8 +292,9 @@ namespace TeamTrack.Services
                     AttachmentUrls = request.AttachmentUrls,
                     EpicName = request.EpicName,
                     EpicColor = request.EpicColor,
-                    ProjectId = projectId,
+                    ProjectId = resolvedProjectId,
                     ModuleId = validModuleId,
+                    ClientModuleId = validClientModuleId,
                     CreatedByUserId = userId,
                     AssignedToUserId = validAssignedToUserId,
                     CreatedAt = DateTime.UtcNow,
@@ -337,6 +399,9 @@ namespace TeamTrack.Services
                     .ThenInclude(p => p.Client)
                 .Include(w => w.Module)
                     .ThenInclude(m => m.Product)
+                .Include(w => w.ClientModule)
+                    .ThenInclude(cm => cm.Client)
+                    .ThenInclude(c => c.Product)
                 .Include(w => w.AssignedTo)
                 .Include(w => w.CreatedBy)
                 .FirstOrDefaultAsync(w => w.Id == workItem.Id);
@@ -361,7 +426,7 @@ namespace TeamTrack.Services
                 .Include(w => w.AssignedTo)
                 .Include(w => w.CreatedBy)
                 .Where(w => w.ProjectId == projectId)
-                .OrderBy(w => w.CreatedAt)
+                .OrderByDescending(w => w.CreatedAt)
                 .ToListAsync();
 
             var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
@@ -408,7 +473,7 @@ namespace TeamTrack.Services
 
             var totalCount = await query.CountAsync();
             var items = await query
-                .OrderBy(w => w.CreatedAt)
+                .OrderByDescending(w => w.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -435,7 +500,7 @@ namespace TeamTrack.Services
                 .Include(w => w.AssignedTo)
                 .Include(w => w.CreatedBy)
                 .Where(w => w.AssignedToUserId == userId)
-                 .OrderBy(w => w.CreatedAt)   // Ascending
+                 .OrderByDescending(w => w.CreatedAt)
                 .ToListAsync();
 
             var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
@@ -540,8 +605,7 @@ namespace TeamTrack.Services
 
             var allItems = await query.ToListAsync();
             var items = allItems
-                .OrderBy(w => GetStatusOrder(w.Status))
-                .ThenByDescending(w => w.CreatedAt)
+                .OrderByDescending(w => w.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToList();
@@ -558,21 +622,28 @@ namespace TeamTrack.Services
             };
         }
 
-        private static int GetStatusOrder(string? status) => status switch
+        private static int GetStatusOrder(string? status) => status?.ToLower() switch
         {
             "pending" => 0,
             "assigned" => 1,
-            "reopened" => 2,
-            "fixed" => 3,
-            "completed" => 4,
-            "future_release" => 5,
-            _ => 6
+            "in_progress" => 2,
+            "completed" => 3,
+            "testing_in_progress" => 4,
+            "bugs" => 5,
+            "open" => 6,
+            "fixed" => 7,
+            "reopen" or "reopened" => 8,
+            "testing_completed" => 9,
+            "released" => 10,
+            "future_release" => 11,
+            "closed" => 12,
+            _ => 13
         };
 
         public async Task<List<EmployeeDropdownDto>> GetAllEmployeesAsync()
         {
             var employees = await _userRepo.Query()
-                .Where(u => (u.UserType == "Employee" || u.UserType == "Both") && u.IsActive)
+                .Where(u => (u.UserType == "Employee" || u.UserType == "Marketing" || u.UserType == "Both") && u.IsActive)
                 .OrderBy(u => u.Name)
                 .ToListAsync();
 
@@ -644,17 +715,20 @@ namespace TeamTrack.Services
                 EpicName = w.EpicName,
                 EpicColor = w.EpicColor,
                 ProjectId = w.ProjectId,
-                ProjectName = w.Project?.Name ?? string.Empty,
-                ProjectNumber = w.Project?.ProjectNumber ?? string.Empty,
+                ProjectName = w.Project?.Name,
+                ProjectNumber = w.Project?.ProjectNumber,
                 AssignedTo = w.AssignedTo?.Name,
                 CreatedBy = w.CreatedBy?.Name ?? string.Empty,
                 ModuleId = w.ModuleId,
                 ModuleName = w.Module?.Name,
-                ProductId = w.Module?.ProductId,
-                ProductName = w.Module?.Product?.Name,
-                ClientId = w.Project?.ClientId,
-                ClientName = w.Project?.Client?.Name,
+                ClientModuleId = w.ClientModuleId,
+                ClientModuleName = w.ClientModule?.Name,
+                ProductId = w.Module?.ProductId ?? w.ClientModule?.Client?.ProductId,
+                ProductName = w.Module?.Product?.Name ?? w.ClientModule?.Client?.Product?.Name,
+                ClientId = w.ClientModule?.ClientId ?? w.Project?.ClientId,
+                ClientName = w.ClientModule?.Client?.Name ?? w.Project?.Client?.Name,
                 CreatedAt = w.CreatedAt,
+                UpdatedAt = w.UpdatedAt,
                 DueDate = w.DueDate,
                 AssignedToUserId = w.AssignedToUserId,
                 FixedBillNumber = w.FixedBillNumber,
@@ -703,30 +777,30 @@ namespace TeamTrack.Services
         }
 
 
-        // Official list of WorkItem.Status values used across the frontend (Task update dropdowns, filters, dashboard)
+        // Official list of WorkItem.Status values matching the 11-step lifecycle workflow (+ legacy fallbacks)
         private static readonly HashSet<string> ValidWorkItemStatuses = new(StringComparer.OrdinalIgnoreCase)
-{
-    "pending", "assigned", "reopened", "in_progress", "future_release", "fixed", "completed", "closed", "waiting_customer"
-};
+        {
+            "assigned", "in_progress", "completed", "testing_in_progress", "bugs", "open", "fixed",
+            "reopen", "reopened", "testing_completed", "released",
+            // Backwards compatibility for existing records
+            "pending", "future_release", "closed", "waiting_customer"
+        };
 
         /// <summary>
-        /// Resolves the status to save on a WorkItem. The "Create Bug" form only offers "new"/"open"
-        /// as initial status (a Bug-specific concept) — those get normalized to "pending" so that
-        /// WorkItem.Status always uses the same vocabulary as the update/filter dropdowns.
-        /// Anything else not in the official list is rejected.
+        /// Resolves the status to save on a WorkItem. Normalizes bug statuses and validates allowed values.
         /// </summary>
         public static string ResolveWorkItemStatus(string? requestedStatus, bool isBug)
         {
             if (string.IsNullOrWhiteSpace(requestedStatus))
-                return "pending";
+                return "assigned";
 
             var normalized = requestedStatus.Trim().ToLower();
 
-            if (isBug && (normalized == "new" || normalized == "open"))
-                return "pending";
+            if (isBug && normalized == "new")
+                return "open";
 
             if (!ValidWorkItemStatuses.Contains(normalized))
-                throw new Exception($"Invalid status '{requestedStatus}'. Allowed values: pending, assigned, reopened, in_progress, future_release, fixed, completed, closed.");
+                throw new Exception($"Invalid status '{requestedStatus}'. Allowed values: assigned, in_progress, completed, testing_in_progress, bugs, open, fixed, reopen, testing_completed, released.");
 
             return normalized;
         }
@@ -734,14 +808,28 @@ namespace TeamTrack.Services
 
         private static readonly Dictionary<string, string> LabelToValueMap = new(StringComparer.OrdinalIgnoreCase)
         {
-            { "Open", "pending" },
             { "Assigned", "assigned" },
-            { "Reopen", "reopened" },
             { "In Progress", "in_progress" },
+            { "In-Progress", "in_progress" },
+            { "Completed", "completed" },
+            { "Testing-In-Progress", "testing_in_progress" },
+            { "Testing In Progress", "testing_in_progress" },
+            { "Testing In-Progress", "testing_in_progress" },
+            { "Bugs", "bugs" },
+            { "Bug", "bugs" },
+            { "Open", "open" },
             { "Fixed", "fixed" },
+            { "Re-open", "reopen" },
+            { "Reopen", "reopen" },
+            { "Reopened", "reopen" },
+            { "Testing Completed", "testing_completed" },
+            { "Released", "released" },
+            // Legacy fallbacks
+            { "Pending", "assigned" },
             { "Resolved", "completed" },
             { "Moved to future release", "future_release" },
-            { "Closed", "closed" }
+            { "Future Release", "future_release" },
+            { "Closed", "released" }
         };
 
         public static List<string> ResolveStatusFilter(string status)
@@ -759,9 +847,10 @@ namespace TeamTrack.Services
         {
             return wStatus.ToLower() switch
             {
-                "completed" or "resolved" => "closed",
+                "completed" or "resolved" or "testing_completed" or "released" or "closed" => "closed",
                 "fixed" => "fixed",
-                "in_progress" => "in_progress",
+                "in_progress" or "testing_in_progress" => "in_progress",
+                "reopen" or "reopened" => "open",
                 _ => "open"
             };
         }
@@ -815,7 +904,7 @@ namespace TeamTrack.Services
                 workItem.FixedBuild = request.FixedBuild;
             }
 
-            if (request.Status == "completed" || request.Status == "fixed")
+            if (request.Status == "completed" || request.Status == "fixed" || request.Status == "testing_completed" || request.Status == "released")
                 workItem.CompletedAt = DateTime.UtcNow;
 
             // Also sync FixedBuild to the linked Bug record if this is a Bug type
@@ -922,20 +1011,24 @@ namespace TeamTrack.Services
             if (workItem == null) return null;
 
             var oldAssigneeId = workItem.AssignedToUserId;
-            workItem.AssignedToUserId = request.AssignedToUserId;
+            var newAssigneeId = (request.AssignedToUserId.HasValue && request.AssignedToUserId.Value > 0)
+                ? request.AssignedToUserId
+                : null;
+
+            workItem.AssignedToUserId = newAssigneeId;
             workItem.UpdatedAt = DateTime.UtcNow;
 
             await _workItemRepo.SaveAsync();
 
-            // ── Activity log: Reassigned ──────────────────────────────────────
-            var action = oldAssigneeId.HasValue ? "Reassigned" : "Assigned";
+            // ── Activity log: Reassigned / Unassigned ─────────────────────────
+            var action = !newAssigneeId.HasValue ? "Unassigned" : (oldAssigneeId.HasValue ? "Reassigned" : "Assigned");
             var reassignLog = new WorkItemActivityLog
             {
                 WorkItemId = workItemId,
                 Action = action,
                 FromUserId = oldAssigneeId,
-                ToUserId = request.AssignedToUserId,
-                ByUserId = byUserId > 0 ? byUserId : request.AssignedToUserId,
+                ToUserId = newAssigneeId,
+                ByUserId = byUserId > 0 ? byUserId : (oldAssigneeId ?? 1),
                 Timestamp = DateTime.UtcNow
             };
             await _activityRepo.AddAsync(reassignLog);
@@ -948,7 +1041,7 @@ namespace TeamTrack.Services
                 var bug = await _bugRepo.GetAsync(b => b.WorkItemId == workItemId);
                 if (bug != null)
                 {
-                    bug.AssignedToUserId = request.AssignedToUserId;
+                    bug.AssignedToUserId = newAssigneeId;
                     bug.UpdatedAt = DateTime.UtcNow;
                     await _bugRepo.SaveAsync();
                 }
@@ -1058,7 +1151,7 @@ namespace TeamTrack.Services
                 .Include(w => w.AssignedTo)
                 .Include(w => w.CreatedBy)
                 .Where(w => involvedWorkItemIds.Contains(w.Id) && w.AssignedToUserId != userId)
-                .OrderBy(w => w.UpdatedAt)
+                .OrderByDescending(w => w.UpdatedAt)
                 .ToListAsync();
 
             var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
@@ -1090,6 +1183,45 @@ namespace TeamTrack.Services
             var project = await _projectRepo.Query()
                 .Include(p => p.AssignedEmployees)
                 .FirstOrDefaultAsync(p => p.Id == projectId);
+
+            if (project == null)
+            {
+                var product = await _productRepo.Query()
+                    .Include(pr => pr.Project)
+                        .ThenInclude(p => p.AssignedEmployees)
+                    .FirstOrDefaultAsync(pr => pr.Id == projectId);
+
+                if (product != null)
+                {
+                    if (product.ProjectId.HasValue && product.ProjectId.Value > 0)
+                    {
+                        project = await _projectRepo.Query()
+                            .Include(p => p.AssignedEmployees)
+                            .FirstOrDefaultAsync(p => p.Id == product.ProjectId.Value);
+                    }
+
+                    if (project == null)
+                    {
+                        var projectNumbers = await _projectRepo.Query().Select(p => p.ProjectNumber).ToListAsync();
+                        var prjNumber = SequenceHelper.GenerateNextNumber(projectNumbers, "PRJ");
+                        project = new Project
+                        {
+                            ProjectNumber = prjNumber,
+                            Name = product.Name,
+                            Description = product.Description,
+                            Status = "active",
+                            CreatedByUserId = 1,
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        };
+                        await _projectRepo.AddAsync(project);
+                        await _projectRepo.SaveAsync();
+
+                        product.ProjectId = project.Id;
+                        await _productRepo.SaveAsync();
+                    }
+                }
+            }
 
             if (project == null) return null;
 
@@ -1159,6 +1291,241 @@ namespace TeamTrack.Services
             };
             await _activityRepo.AddAsync(log);
             await _activityRepo.SaveAsync();
+        }
+
+        // Client Modules
+        public async Task<List<ClientModuleDto>> GetClientModulesByClientAsync(int clientId)
+        {
+            var modules = await _clientModuleRepo.Query()
+                .Include(cm => cm.Client)
+                .Where(cm => cm.ClientId == clientId)
+                .OrderBy(cm => cm.Name)
+                .Select(cm => new ClientModuleDto
+                {
+                    Id = cm.Id,
+                    ClientModuleNumber = cm.ClientModuleNumber,
+                    Name = cm.Name,
+                    Description = cm.Description,
+                    ClientId = cm.ClientId,
+                    ClientName = cm.Client != null ? cm.Client.Name : string.Empty,
+                    CreatedAt = cm.CreatedAt
+                })
+                .ToListAsync();
+
+            return modules;
+        }
+
+        public async Task<ClientModuleDto> CreateClientModuleAsync(CreateClientModuleRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+                throw new Exception("Client module name is required");
+
+            var clientExists = await _clientRepo.Query().AnyAsync(c => c.Id == request.ClientId);
+            if (!clientExists)
+                throw new Exception("Client not found");
+
+            const int maxRetries = 10;
+            for (int attempt = 0; attempt < maxRetries; attempt++)
+            {
+                var existingNumbers = await _clientModuleRepo.Query().Select(cm => cm.ClientModuleNumber).ToListAsync();
+                var clientModuleNumber = SequenceHelper.GenerateNextNumber(existingNumbers, "CMD");
+
+                var cm = new ClientModule
+                {
+                    ClientModuleNumber = clientModuleNumber,
+                    Name = request.Name.Trim(),
+                    Description = request.Description?.Trim(),
+                    ClientId = request.ClientId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                try
+                {
+                    await _clientModuleRepo.AddAsync(cm);
+                    await _clientModuleRepo.SaveAsync();
+
+                    var created = await _clientModuleRepo.Query()
+                        .Include(c => c.Client)
+                        .FirstOrDefaultAsync(c => c.Id == cm.Id);
+
+                    return new ClientModuleDto
+                    {
+                        Id = created!.Id,
+                        ClientModuleNumber = created.ClientModuleNumber,
+                        Name = created.Name,
+                        Description = created.Description,
+                        ClientId = created.ClientId,
+                        ClientName = created.Client?.Name ?? string.Empty,
+                        CreatedAt = created.CreatedAt
+                    };
+                }
+                catch (DbUpdateException) when (attempt < maxRetries - 1)
+                {
+                    _clientModuleRepo.Detach(cm);
+                }
+            }
+
+            throw new InvalidOperationException("Failed to generate a unique client module code. Please try again.");
+        }
+
+        public async Task<ClientModuleDto?> UpdateClientModuleAsync(int clientModuleId, UpdateClientModuleRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+                throw new Exception("Client module name is required");
+
+            var cm = await _clientModuleRepo.GetAsync(c => c.Id == clientModuleId);
+            if (cm == null) return null;
+
+            var exists = await _clientModuleRepo.Query().AnyAsync(c => c.Id != clientModuleId && c.ClientId == request.ClientId && c.Name.ToLower() == request.Name.Trim().ToLower());
+            if (exists)
+                throw new Exception("A client module with this name already exists for this client");
+
+            cm.Name = request.Name.Trim();
+            cm.Description = request.Description?.Trim();
+            cm.ClientId = request.ClientId;
+            cm.UpdatedAt = DateTime.UtcNow;
+
+            await _clientModuleRepo.SaveAsync();
+
+            var updated = await _clientModuleRepo.Query()
+                .Include(c => c.Client)
+                .FirstOrDefaultAsync(c => c.Id == cm.Id);
+
+            return new ClientModuleDto
+            {
+                Id = updated!.Id,
+                ClientModuleNumber = updated.ClientModuleNumber,
+                Name = updated.Name,
+                Description = updated.Description,
+                ClientId = updated.ClientId,
+                ClientName = updated.Client?.Name ?? string.Empty,
+                CreatedAt = updated.CreatedAt
+            };
+        }
+
+        public async Task<bool> DeleteClientModuleAsync(int clientModuleId)
+        {
+            var cm = await _clientModuleRepo.GetAsync(c => c.Id == clientModuleId);
+            if (cm == null) return false;
+
+            _clientModuleRepo.Remove(cm);
+            await _clientModuleRepo.SaveAsync();
+            return true;
+        }
+
+        // Parent-based WorkItem fetching (Structure A: Module / Structure B: Client Module / Product)
+        public async Task<List<WorkItemResponseDto>> GetWorkItemsByParentAsync(int? moduleId, int? clientModuleId, int? productId, int userId, string userRole)
+        {
+            var query = _workItemRepo.Query()
+                .Include(w => w.Project)
+                    .ThenInclude(p => p.Client)
+                .Include(w => w.Module)
+                    .ThenInclude(m => m.Product)
+                .Include(w => w.ClientModule)
+                    .ThenInclude(cm => cm.Client)
+                    .ThenInclude(c => c.Product)
+                .Include(w => w.AssignedTo)
+                .Include(w => w.CreatedBy)
+                .AsQueryable();
+
+            if (clientModuleId.HasValue && clientModuleId.Value > 0)
+            {
+                query = query.Where(w => w.ClientModuleId == clientModuleId.Value);
+            }
+            else if (moduleId.HasValue && moduleId.Value > 0)
+            {
+                query = query.Where(w => w.ModuleId == moduleId.Value);
+            }
+            else if (productId.HasValue && productId.Value > 0)
+            {
+                var prod = await _productRepo.GetAsync(p => p.Id == productId.Value);
+                var linkedProjectId = prod?.ProjectId;
+                query = query.Where(w => (w.Module != null && w.Module.ProductId == productId.Value) ||
+                                         (w.ClientModule != null && w.ClientModule.Client != null && w.ClientModule.Client.ProductId == productId.Value) ||
+                                         (linkedProjectId.HasValue && w.ProjectId == linkedProjectId.Value));
+            }
+
+            var items = await query.OrderByDescending(w => w.CreatedAt).ToListAsync();
+
+            var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
+            var parents = await _workItemRepo.Query().Where(p => parentIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id);
+
+            return items.Select(w => MapWorkItemToDto(w, parents)).ToList();
+        }
+
+        public async Task<PagedResult<WorkItemResponseDto>> GetWorkItemsByParentPagedAsync(int? moduleId, int? clientModuleId, int? productId, int page, int pageSize, string? status, string? search, string? assignedTo = null, string? dueDate = null)
+        {
+            var query = _workItemRepo.Query()
+                .Include(w => w.Project)
+                    .ThenInclude(p => p.Client)
+                .Include(w => w.Module)
+                    .ThenInclude(m => m.Product)
+                .Include(w => w.ClientModule)
+                    .ThenInclude(cm => cm.Client)
+                    .ThenInclude(c => c.Product)
+                .Include(w => w.AssignedTo)
+                .Include(w => w.CreatedBy)
+                .AsQueryable();
+
+            if (clientModuleId.HasValue && clientModuleId.Value > 0)
+            {
+                query = query.Where(w => w.ClientModuleId == clientModuleId.Value);
+            }
+            else if (moduleId.HasValue && moduleId.Value > 0)
+            {
+                query = query.Where(w => w.ModuleId == moduleId.Value);
+            }
+            else if (productId.HasValue && productId.Value > 0)
+            {
+                var prod = await _productRepo.GetAsync(p => p.Id == productId.Value);
+                var linkedProjectId = prod?.ProjectId;
+                query = query.Where(w => (w.Module != null && w.Module.ProductId == productId.Value) ||
+                                         (w.ClientModule != null && w.ClientModule.Client != null && w.ClientModule.Client.ProductId == productId.Value) ||
+                                         (linkedProjectId.HasValue && w.ProjectId == linkedProjectId.Value));
+            }
+
+            if (!string.IsNullOrWhiteSpace(status) && status != "all")
+            {
+                var statuses = ResolveStatusFilter(status);
+                query = query.Where(w => statuses.Contains(w.Status));
+            }
+
+            if (!string.IsNullOrWhiteSpace(assignedTo) && assignedTo != "all")
+            {
+                if (assignedTo == "unassigned")
+                    query = query.Where(w => w.AssignedToUserId == null);
+                else
+                    query = query.Where(w => w.AssignedTo != null && w.AssignedTo.Name == assignedTo);
+            }
+
+            if (!string.IsNullOrWhiteSpace(dueDate) && DateOnly.TryParse(dueDate, out var parsedDueDate))
+            {
+                var startDate = parsedDueDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                var endDate = parsedDueDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
+                query = query.Where(w => w.DueDate.HasValue && w.DueDate.Value >= startDate && w.DueDate.Value <= endDate);
+            }
+
+            if (!string.IsNullOrWhiteSpace(search))
+                query = query.Where(w => w.Title.Contains(search) || w.WorkNumber.Contains(search));
+
+            var totalCount = await query.CountAsync();
+            var items = await query
+                .OrderByDescending(w => w.CreatedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            var parentIds = items.Where(w => w.ParentId.HasValue).Select(w => w.ParentId!.Value).Distinct().ToList();
+            var parents = await _workItemRepo.Query().Where(p => parentIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id);
+
+            return new PagedResult<WorkItemResponseDto>
+            {
+                Items = items.Select(w => MapWorkItemToDto(w, parents)).ToList(),
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            };
         }
     }
 }

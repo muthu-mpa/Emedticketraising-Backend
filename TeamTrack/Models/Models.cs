@@ -7,7 +7,7 @@ namespace TeamTrack.Models
         public string Email { get; set; } = string.Empty;
         public string? Mobile { get; set; }
         public string PasswordHash { get; set; } = string.Empty;
-        public string UserType { get; set; } = "Employee"; // ProductManager, Employee
+        public string UserType { get; set; } = "Employee"; // ProductManager, Employee, Marketing, Both
         public bool IsActive { get; set; } = true;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string? ProfilePicture { get; set; }
@@ -91,8 +91,9 @@ namespace TeamTrack.Models
         public string? AttachmentUrls { get; set; }
         public string? EpicName { get; set; }
         public string? EpicColor { get; set; }
-        public int ProjectId { get; set; }
+        public int? ProjectId { get; set; }
         public int? ModuleId { get; set; } // Linked Module
+        public int? ClientModuleId { get; set; } // Linked Client Module
         public int CreatedByUserId { get; set; }
         public int? AssignedToUserId { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -107,6 +108,7 @@ namespace TeamTrack.Models
 
         public Project? Project { get; set; }
         public Module? Module { get; set; }
+        public ClientModule? ClientModule { get; set; }
         public User? CreatedBy { get; set; }
         public User? AssignedTo { get; set; }
     }

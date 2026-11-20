@@ -9,6 +9,8 @@ namespace TeamTrack.DTOs
         public string ClientNumber { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
+        public int? ProductId { get; set; }
+        public string? ProductName { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 
@@ -16,6 +18,14 @@ namespace TeamTrack.DTOs
     {
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
+        public int? ProductId { get; set; }
+    }
+
+    public class UpdateClientRequestDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public int? ProductId { get; set; }
     }
 
     public class ProductDto
@@ -24,8 +34,8 @@ namespace TeamTrack.DTOs
         public string ProductNumber { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
-        public int ProjectId { get; set; }
-        public string ProjectName { get; set; } = string.Empty;
+        public int? ProjectId { get; set; }
+        public string? ProjectName { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 
@@ -33,7 +43,14 @@ namespace TeamTrack.DTOs
     {
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
-        public int ProjectId { get; set; }
+        public int? ProjectId { get; set; }
+    }
+
+    public class UpdateProductRequestDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public int? ProjectId { get; set; }
     }
 
     public class ModuleDto
@@ -54,23 +71,35 @@ namespace TeamTrack.DTOs
         public int ProductId { get; set; }
     }
 
-    public class UpdateClientRequestDto
-    {
-        public string Name { get; set; } = string.Empty;
-        public string? Description { get; set; }
-    }
-
-    public class UpdateProductRequestDto
-    {
-        public string Name { get; set; } = string.Empty;
-        public string? Description { get; set; }
-        public int ProjectId { get; set; }
-    }
-
     public class UpdateModuleRequestDto
     {
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
         public int ProductId { get; set; }
+    }
+
+    public class ClientModuleDto
+    {
+        public int Id { get; set; }
+        public string ClientModuleNumber { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public int ClientId { get; set; }
+        public string ClientName { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
+    }
+
+    public class CreateClientModuleRequestDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public int ClientId { get; set; }
+    }
+
+    public class UpdateClientModuleRequestDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public int ClientId { get; set; }
     }
 }

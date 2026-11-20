@@ -17,9 +17,11 @@ namespace TeamTrack.Services
         private readonly IMemoryCache _cache;
         private readonly IEmailService _emailService;
         private readonly IRepository<UserOtp> _otpRepo;
+        private readonly IHostEnvironment _env;
 
-        public AuthService(IRepository<User> userRepo, IConfiguration config, IMemoryCache cache, IEmailService emailService, IRepository<UserOtp> otpRepo)
+        public AuthService(IRepository<User> userRepo, IConfiguration config, IMemoryCache cache, IEmailService emailService, IRepository<UserOtp> otpRepo, IHostEnvironment env)
         {
+            _env = env;
             _userRepo = userRepo;
             _config = config;
             _cache = cache;
@@ -40,6 +42,7 @@ namespace TeamTrack.Services
             {
                 roles.Add("ProductManager");
                 roles.Add("Employee");
+                roles.Add("Marketing");
             }
             else
             {
@@ -48,8 +51,7 @@ namespace TeamTrack.Services
 
             // OTP-exempt accounts (configured in appsettings under "OtpExemptEmails")
             // skip the email OTP step entirely.
-            var otpExemptEmails = _config.GetSection("OtpExemptEmails").Get<string[]>() ?? Array.Empty<string>();
-            var isOtpExempt = otpExemptEmails.Any(e => string.Equals(e, user.Email, StringComparison.OrdinalIgnoreCase));
+            var isOtpExempt = OtpExemption.IsExempt(_config, _env, user.Email);
             if (isOtpExempt)
             {
                 if (roles.Count > 1)
@@ -128,8 +130,7 @@ namespace TeamTrack.Services
 
         public async Task<LoginResponseDto?> VerifyOtpAsync(VerifyOtpRequestDto request)
         {
-            var otpExemptEmails = _config.GetSection("OtpExemptEmails").Get<string[]>() ?? Array.Empty<string>();
-            var isOtpExempt = otpExemptEmails.Any(e => string.Equals(e, request.UserName, StringComparison.OrdinalIgnoreCase));
+            var isOtpExempt = OtpExemption.IsExempt(_config, _env, request.UserName);
 
             if (!isOtpExempt)
             {
@@ -164,6 +165,7 @@ namespace TeamTrack.Services
             {
                 roles.Add("ProductManager");
                 roles.Add("Employee");
+                roles.Add("Marketing");
             }
             else
             {
@@ -275,7 +277,7 @@ namespace TeamTrack.Services
             var key = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes(_config["Jwt:Key"]!));
 
-            var claims = new[]
+            var claims = new List<Claim>
             {
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new Claim(ClaimTypes.Name, user.Name),
@@ -284,6 +286,11 @@ namespace TeamTrack.Services
                 new Claim(JwtRegisteredClaimNames.Name, user.Name),
                 new Claim("role", selectedRole)
             };
+
+            if (selectedRole == "Marketing")
+            {
+                claims.Add(new Claim(ClaimTypes.Role, "Employee"));
+            }
 
             var token = new JwtSecurityToken(
                 issuer: _config["Jwt:Issuer"],
@@ -298,7 +305,7 @@ namespace TeamTrack.Services
 
         public async Task<bool> DeactivateEmployeeAsync(int userId)
         {
-            var user = await _userRepo.GetAsync(u => u.Id == userId && (u.UserType == "Employee" || u.UserType == "Both"));
+            var user = await _userRepo.GetAsync(u => u.Id == userId && (u.UserType == "Employee" || u.UserType == "Marketing" || u.UserType == "Both"));
             if (user == null) return false;
 
             user.IsActive = false;
@@ -323,6 +330,7 @@ namespace TeamTrack.Services
             {
                 roles.Add("ProductManager");
                 roles.Add("Employee");
+                roles.Add("Marketing");
             }
             else
             {

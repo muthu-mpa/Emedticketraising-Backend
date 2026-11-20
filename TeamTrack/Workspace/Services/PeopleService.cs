@@ -26,24 +26,25 @@ namespace TeamTrack.Workspace.Services
 
         public async Task<WsResult<PeopleListDto>> ListAsync(CurrentUser user, string? role = null, string? search = null)
         {
-            if (!string.IsNullOrWhiteSpace(role) && role != EmployeeRole && role != CurrentUser.PmRole)
-                return WsResult<PeopleListDto>.Fail(400, "Role must be Employee or ProductManager.");
+            if (!string.IsNullOrWhiteSpace(role) && role != EmployeeRole && role != CurrentUser.PmRole && role != "Marketing")
+                return WsResult<PeopleListDto>.Fail(400, "Role must be Employee, ProductManager, or Marketing.");
 
             var users = await _app.Users.Where(u => u.IsActive).OrderBy(u => u.Name).ToListAsync();
             if (!string.IsNullOrWhiteSpace(search))
             {
                 var s = search.Trim();
-                // "name or role": the role text people see is "Employee" / "Product Manager"
+                // "name or role": the role text people see is "Employee" / "Product Manager" / "Marketing Team"
                 users = users.Where(u => u.Name.Contains(s, StringComparison.OrdinalIgnoreCase)
                     || RoleLabel(u.UserType).Contains(s, StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
-            static bool Is(TeamTrack.Models.User u, string r) => u.UserType == r || u.UserType == "Both";
+            static bool Is(TeamTrack.Models.User u, string r) => u.UserType == r || (u.UserType == "Both" && r != "Marketing");
             var counts = new Dictionary<string, int>
             {
                 ["all"] = users.Count,
                 [EmployeeRole] = users.Count(u => Is(u, EmployeeRole)),
                 [CurrentUser.PmRole] = users.Count(u => Is(u, CurrentUser.PmRole)),
+                ["Marketing"] = users.Count(u => Is(u, "Marketing")),
             };
             if (!string.IsNullOrWhiteSpace(role)) users = users.Where(u => Is(u, role)).ToList();
 
@@ -56,6 +57,7 @@ namespace TeamTrack.Workspace.Services
         private static string RoleLabel(string userType) => userType switch
         {
             "ProductManager" => "Product Manager",
+            "Marketing" => "Marketing Team",
             "Both" => "Employee Product Manager",
             _ => "Employee",
         };

@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using TeamTrack.DTOs;
 using TeamTrack.Models;
 using TeamTrack.Repositories;
+using TeamTrack.Services;
 
 namespace TeamTrack.Controllers
 {
@@ -52,30 +53,44 @@ namespace TeamTrack.Controllers
             }
 
             var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-            var count = await _ticketRepo.Query().CountAsync();
-
-            var ticket = new Ticket
+            const int maxRetries = 10;
+            for (int attempt = 0; attempt < maxRetries; attempt++)
             {
-                TicketNumber = $"TCK-{(count + 1):D3}",
-                Title = request.Title.Trim(),
-                Description = request.Description,
-                Category = request.Category,
-                Priority = request.Priority,
-                Status = "open",
-                ProjectId = request.ProjectId,
-                RaisedByUserId = userId,
-                AssignedToUserId = request.AssignedToUserId,
-                BuildId = request.BuildId,
-                WhatsappNotify = request.WhatsappNotify,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
+                var existingNumbers = await _ticketRepo.Query().Select(t => t.TicketNumber).ToListAsync();
+                var ticketNumber = SequenceHelper.GenerateNextNumber(existingNumbers, "TCK");
 
-            await _ticketRepo.AddAsync(ticket);
-            await _ticketRepo.SaveAsync();
+                var ticket = new Ticket
+                {
+                    TicketNumber = ticketNumber,
+                    Title = request.Title.Trim(),
+                    Description = request.Description,
+                    Category = request.Category,
+                    Priority = request.Priority,
+                    Status = "open",
+                    ProjectId = request.ProjectId,
+                    RaisedByUserId = userId,
+                    AssignedToUserId = request.AssignedToUserId,
+                    BuildId = request.BuildId,
+                    WhatsappNotify = request.WhatsappNotify,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
 
-            var responseDto = await GetTicketResponseDto(ticket.Id);
-            return Ok(ApiResponse<TicketResponseDto>.SuccessResponse(responseDto!, "Ticket created successfully."));
+                try
+                {
+                    await _ticketRepo.AddAsync(ticket);
+                    await _ticketRepo.SaveAsync();
+
+                    var responseDto = await GetTicketResponseDto(ticket.Id);
+                    return Ok(ApiResponse<TicketResponseDto>.SuccessResponse(responseDto!, "Ticket created successfully."));
+                }
+                catch (DbUpdateException) when (attempt < maxRetries - 1)
+                {
+                    _ticketRepo.Detach(ticket);
+                }
+            }
+
+            return StatusCode(500, ApiResponse<string>.FailureResponse("Failed to generate a unique ticket code. Please try again."));
         }
 
         [HttpPut("{id}")]

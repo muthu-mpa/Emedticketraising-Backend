@@ -13,11 +13,6 @@ namespace TeamTrack.Workspace.Dtos
         public string? Body { get; set; }
     }
 
-    public class NoteInput
-    {
-        public string? Note { get; set; }
-    }
-
     public class SendCampaignInput
     {
         /// <summary>Must be true: the client shows "Send to {contact} at {email}?" first.</summary>
@@ -34,29 +29,16 @@ namespace TeamTrack.Workspace.Dtos
         public string Subject { get; set; } = "";
         public string Body { get; set; } = "";
         public string Status { get; set; } = "";
-        public string? ManagerNote { get; set; }
         public int CreatedByUserId { get; set; }
         public string CreatedByName { get; set; } = "";
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
         public DateTime? SentAt { get; set; }
 
-        // filled for drafts created by an Excel import
-        public int? ImportId { get; set; }
-        public int? SourceRow { get; set; }
-        public string? Segment { get; set; }
-        public string? Priority { get; set; }
-        public string? SendWave { get; set; }
-        /// <summary>Why a draft cannot be sent for approval yet (missing/invalid email, placeholders left). Empty when nothing blocks it.</summary>
-        public List<string> SubmitBlockers { get; set; } = [];
+        /// <summary>Why a draft cannot be sent yet (missing/invalid email, placeholders left). Empty when nothing blocks it.</summary>
+        public List<string> SendBlockers { get; set; } = [];
 
-        /// <summary>changes_asked | needs_your_approval | ready_to_send | null</summary>
-        public string? Badge { get; set; }
         public bool CanEdit { get; set; }
-        public bool CanSubmit { get; set; }
-        public bool CanApprove { get; set; }
-        public bool CanAskChanges { get; set; }
-        public bool CanTakeBack { get; set; }
         public bool CanSend { get; set; }
     }
 
@@ -84,14 +66,6 @@ namespace TeamTrack.Workspace.Dtos
         /// <summary>Counts per status for the current search / "only mine" filter (ignores the status filter).</summary>
         public Dictionary<string, int> Counts { get; set; } = new();
         public List<CampaignDto> Items { get; set; } = [];
-    }
-
-    public class CampaignTemplateDto
-    {
-        public int Id { get; set; }
-        public string Name { get; set; } = "";
-        public string Subject { get; set; } = "";
-        public string Body { get; set; } = "";
     }
 
     // ---------- Leave & permission ----------

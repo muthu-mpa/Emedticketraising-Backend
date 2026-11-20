@@ -126,7 +126,6 @@ namespace TeamTrack.Tests
             Fails(await k.Sheets.PatchAsync(stranger, sheet.Id, Patch(1, Cell(1, 1, "x"))), 403);
             Fails(await k.Sheets.DownloadAsync(stranger, sheet.Id), 403);
             Fails(await k.Sheets.HistoryAsync(stranger, sheet.Id), 403);
-            Fails(await k.Sheets.ImportPreviewAsync(stranger, sheet.Id), 403);
             Fails(await k.Sheets.SetAccessAsync(stranger, sheet.Id, []), 403);
             Fails(await k.Sheets.DeleteAsync(stranger, sheet.Id), 403);
             Fails(await k.Sheets.GetAsync(stranger, 999), 404);
@@ -465,35 +464,6 @@ namespace TeamTrack.Tests
             Assert.Equal([stored], k.SheetFiles.Deleted);
             Fails(await k.Sheets.GetAsync(k.Asha, sheet.Id), 404);
             Fails(await k.Sheets.DeleteAsync(k.Asha, sheet.Id), 404);
-        }
-
-        // ---------- bonus: shared sheet -> campaign drafts ----------
-
-        [Fact]
-        public async Task A_shared_sheet_can_be_previewed_and_imported_as_campaign_drafts()
-        {
-            var k = new Kit();
-            var sheet = await BlankAsync(k, title: "Outreach list");
-            Ok(await k.Sheets.SetAccessAsync(k.Asha, sheet.Id, [new() { UserId = k.Ben.Id, CanEdit = true }]));
-            string[] headers = ["Campaign name", "Client", "Contact person", "Client email", "Subject", "Message"];
-            var changes = headers.Select((h, i) => Cell(1, i + 1, h)).ToList();
-            changes.AddRange(new[] { "Intro", "Apollo", "Dr. Rao", "rao@apollo.example", "Hello", "Hi doctor" }.Select((v, i) => Cell(2, i + 1, v)));
-            changes.AddRange(new[] { "Second", "Apollo", "Dr. Rao", "", "Again", "Hi [First name]" }.Select((v, i) => Cell(3, i + 1, v)));
-            Ok(await k.Sheets.PatchAsync(k.Ben, sheet.Id, new SheetPatchInput { BaseVersion = 1, Changes = changes }));
-
-            var preview = Ok(await k.Sheets.ImportPreviewAsync(k.Ben, sheet.Id)); // a collaborator (Ben) can import it as his own drafts
-            Assert.Equal("simple_template", preview.Format);
-            Assert.Equal(["ok", "error"], preview.Rows.Select(r => r.Severity));
-            Assert.Contains("Outreach list", preview.FileName);
-            Assert.Equal(0, await k.Ws.Campaigns.CountAsync()); // still saves nothing
-
-            var committed = Ok(await k.Imports.CommitAsync(k.Ben, preview.PreviewToken, null, [2, 3]));
-            Assert.Equal(2, committed.ImportedRows);
-            Assert.All(await k.Ws.Campaigns.ToListAsync(), c => Assert.Equal(k.Ben.Id, c.CreatedByUserId));
-
-            Fails(await k.Sheets.ImportPreviewAsync(k.Priya, sheet.Id), 403); // PMs view but do not create campaigns
-            var blank = await BlankAsync(k, title: "Empty");
-            Fails(await k.Sheets.ImportPreviewAsync(k.Asha, blank.Id), 400, "supported layout");
         }
     }
 }

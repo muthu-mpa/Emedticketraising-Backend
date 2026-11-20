@@ -38,6 +38,9 @@ namespace TeamTrack.DTOs
         public int? AssignedToUserId { get; set; }
         public DateTime? DueDate { get; set; }
         public int? ModuleId { get; set; }
+        public int? ClientModuleId { get; set; }
+        public int? ProductId { get; set; }
+        public int? ProjectId { get; set; }
         public string? Severity { get; set; }
         public string? EpicName { get; set; }
         public string? EpicColor { get; set; }
@@ -65,19 +68,22 @@ namespace TeamTrack.DTOs
         public string? Labels { get; set; }
         public string? Team { get; set; }
         public string? AttachmentUrls { get; set; }
-        public string ProjectName { get; set; } = string.Empty;
-        public string ProjectNumber { get; set; } = string.Empty;
+        public string? ProjectName { get; set; }
+        public string? ProjectNumber { get; set; }
         public string? AssignedTo { get; set; }
         public string CreatedBy { get; set; } = string.Empty;
         public int? ModuleId { get; set; }
         public string? ModuleName { get; set; }
+        public int? ClientModuleId { get; set; }
+        public string? ClientModuleName { get; set; }
         public int? ProductId { get; set; }
         public string? ProductName { get; set; }
         public int? ClientId { get; set; }
         public string? ClientName { get; set; }
         public DateTime CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
         public DateTime? DueDate { get; set; }
-        public int ProjectId { get; set; }
+        public int? ProjectId { get; set; }
         public string? Severity { get; set; }
         public string? EpicName { get; set; }
         public string? EpicColor { get; set; }
@@ -116,7 +122,12 @@ namespace TeamTrack.DTOs
 
     public class ReassignWorkItemRequestDto
     {
-        public int AssignedToUserId { get; set; }
+        public int? AssignedToUserId { get; set; }
+    }
+
+    public class UpdateWorkItemDescriptionRequestDto
+    {
+        public string? Description { get; set; }
     }
 
     public class EmployeeFullDto

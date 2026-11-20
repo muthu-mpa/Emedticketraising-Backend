@@ -1,0 +1,109 @@
+### Marketing Lead Desk: requests that prove the API (VS Code REST Client / Visual Studio .http)
+### Needs Features:Marketing=true (on in appsettings.Development.json) and Seed:MarketingDemoPassword set.
+@host = http://localhost:5298
+@password = <the value of Seed:MarketingDemoPassword>
+
+### 1. Sign in as the demo user (OTP-exempt in Development, so the token comes back directly)
+# @name login
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "userType": "Marketing", "userName": "marketing.demo@example.com", "password": "{{password}}" }
+
+###
+@token = {{login.response.body.$.data.token}}
+
+### 2. Fixed lists
+GET {{host}}/api/marketing/lookups
+Authorization: Bearer {{token}}
+
+### 3. The work queue returns Sofia Marino
+# @name queue
+GET {{host}}/api/marketing/leads/queue?sort=score&dir=desc
+Authorization: Bearer {{token}}
+
+###
+@leadId = {{queue.response.body.$.data[0].id}}
+
+### 4. Her detail: 4 history entries, newest first
+GET {{host}}/api/marketing/leads/{{leadId}}
+Authorization: Bearer {{token}}
+
+### 5. Dashboard
+GET {{host}}/api/marketing/dashboard
+Authorization: Bearer {{token}}
+
+### 6. Pick up (a second pick-up, or another user's, answers 409)
+POST {{host}}/api/marketing/leads/{{leadId}}/pick-up
+Authorization: Bearer {{token}}
+
+### 7. Log an email with a file
+POST {{host}}/api/marketing/leads/{{leadId}}/history
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----mk
+
+------mk
+Content-Disposition: form-data; name="kind"
+
+Email sent
+------mk
+Content-Disposition: form-data; name="occurredAt"
+
+2026-11-18T09:00:00Z
+------mk
+Content-Disposition: form-data; name="subject"
+
+Case study from a law firm
+------mk
+Content-Disposition: form-data; name="body"
+
+Hi Sofia, here is the case study.
+------mk
+Content-Disposition: form-data; name="files"; filename="case-study.txt"
+Content-Type: text/plain
+
+Case study text
+------mk
+Content-Disposition: form-data; name="filesMeta"
+
+[{"fileName":"case-study.txt","signedBy":null,"signedAt":null}]
+------mk--
+
+### 8. Change stage, score, close, return
+PUT {{host}}/api/marketing/leads/{{leadId}}/stage
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "stage": "Interested" }
+
+###
+PUT {{host}}/api/marketing/leads/{{leadId}}/score
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "score": 92 }
+
+###
+POST {{host}}/api/marketing/leads/{{leadId}}/return
+Authorization: Bearer {{token}}
+
+###
+POST {{host}}/api/marketing/leads/{{leadId}}/close
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "reason": "Not interested" }
+
+### 9. A user WITHOUT the Marketing role gets 403 (sign in as an Employee, then call any endpoint)
+# @name employee
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "userType": "Employee", "userName": "<an employee email>", "password": "<their password>" }
+
+###
+GET {{host}}/api/marketing/leads/queue
+Authorization: Bearer {{employee.response.body.$.data.token}}
+
+### No token: 401
+GET {{host}}/api/marketing/leads/queue

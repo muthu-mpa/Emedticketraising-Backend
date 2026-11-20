@@ -18,6 +18,7 @@ namespace TeamTrack.Data
         public DbSet<Client> Clients => Set<Client>();
         public DbSet<Product> Products => Set<Product>();
         public DbSet<Module> Modules => Set<Module>();
+        public DbSet<ClientModule> ClientModules => Set<ClientModule>();
         public DbSet<SoftwareBuild> SoftwareBuilds => Set<SoftwareBuild>();
         public DbSet<WorkItemActivityLog> WorkItemActivityLogs => Set<WorkItemActivityLog>();
         public DbSet<UserOtp> UserOtps => Set<UserOtp>();
@@ -151,6 +152,7 @@ namespace TeamTrack.Data
                 entity.Property(w => w.Priority).HasColumnName("priority");
                 entity.Property(w => w.ProjectId).HasColumnName("project_id");
                 entity.Property(w => w.ModuleId).HasColumnName("module_id");
+                entity.Property(w => w.ClientModuleId).HasColumnName("client_module_id");
                 entity.Property(w => w.CreatedByUserId).HasColumnName("created_by_user_id");
                 entity.Property(w => w.AssignedToUserId).HasColumnName("assigned_to_user_id");
                 entity.Property(w => w.CreatedAt).HasColumnName("created_at");
@@ -173,11 +175,17 @@ namespace TeamTrack.Data
                 entity.HasOne(w => w.Project)
                       .WithMany(p => p.WorkItems)
                       .HasForeignKey(w => w.ProjectId)
-                      .OnDelete(DeleteBehavior.Cascade);
+                      .IsRequired(false)
+                      .OnDelete(DeleteBehavior.SetNull);
 
                 entity.HasOne(w => w.Module)
                       .WithMany(m => m.WorkItems)
                       .HasForeignKey(w => w.ModuleId)
+                      .OnDelete(DeleteBehavior.SetNull);
+
+                entity.HasOne(w => w.ClientModule)
+                      .WithMany(cm => cm.WorkItems)
+                      .HasForeignKey(w => w.ClientModuleId)
                       .OnDelete(DeleteBehavior.SetNull);
 
                 entity.HasOne(w => w.CreatedBy)
@@ -283,9 +291,15 @@ namespace TeamTrack.Data
                 entity.Property(c => c.ClientNumber).HasColumnName("client_number");
                 entity.Property(c => c.Name).HasColumnName("name");
                 entity.Property(c => c.Description).HasColumnName("description");
+                entity.Property(c => c.ProductId).HasColumnName("product_id");
                 entity.Property(c => c.CreatedAt).HasColumnName("created_at");
                 entity.Property(c => c.UpdatedAt).HasColumnName("updated_at");
                 entity.HasIndex(c => c.ClientNumber).IsUnique();
+
+                entity.HasOne(c => c.Product)
+                      .WithMany(p => p.Clients)
+                      .HasForeignKey(c => c.ProductId)
+                      .OnDelete(DeleteBehavior.SetNull);
             });
 
             modelBuilder.Entity<Product>(entity =>
@@ -304,6 +318,26 @@ namespace TeamTrack.Data
                 entity.HasOne(p => p.Project)
                       .WithMany()
                       .HasForeignKey(p => p.ProjectId)
+                      .IsRequired(false)
+                      .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            modelBuilder.Entity<ClientModule>(entity =>
+            {
+                entity.ToTable("client_modules");
+                entity.HasKey(cm => cm.Id);
+                entity.Property(cm => cm.Id).HasColumnName("id");
+                entity.Property(cm => cm.ClientModuleNumber).HasColumnName("client_module_number");
+                entity.Property(cm => cm.Name).HasColumnName("name");
+                entity.Property(cm => cm.Description).HasColumnName("description");
+                entity.Property(cm => cm.ClientId).HasColumnName("client_id");
+                entity.Property(cm => cm.CreatedAt).HasColumnName("created_at");
+                entity.Property(cm => cm.UpdatedAt).HasColumnName("updated_at");
+                entity.HasIndex(cm => cm.ClientModuleNumber).IsUnique();
+
+                entity.HasOne(cm => cm.Client)
+                      .WithMany(c => c.ClientModules)
+                      .HasForeignKey(cm => cm.ClientId)
                       .OnDelete(DeleteBehavior.Cascade);
             });
 

@@ -63,9 +63,5 @@ namespace TeamTrack.Workspace.Controllers
 
         [HttpDelete("{id:int}")]
         public async Task<IActionResult> Delete(int id) => Respond(await _sheets.DeleteAsync(Me, id));
-
-        /// <summary>Run the campaign import preview on this sheet's current data. Commit with POST campaigns/import/commit.</summary>
-        [HttpPost("{id:int}/import-preview")]
-        public async Task<IActionResult> ImportPreview(int id) => Respond(await _sheets.ImportPreviewAsync(Me, id));
     }
 }

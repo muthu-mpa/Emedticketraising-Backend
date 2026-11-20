@@ -17,20 +17,13 @@ namespace TeamTrack.Workspace.Data
         public DbSet<WsTimeOffRequest> TimeOffRequests => Set<WsTimeOffRequest>();
         public DbSet<WsProjectDocument> ProjectDocuments => Set<WsProjectDocument>();
         public DbSet<WsNotification> Notifications => Set<WsNotification>();
-        public DbSet<WsCampaignImport> CampaignImports => Set<WsCampaignImport>();
         public DbSet<WsSharedSheet> SharedSheets => Set<WsSharedSheet>();
         public DbSet<WsSharedSheetAccess> SharedSheetAccess => Set<WsSharedSheetAccess>();
         public DbSet<WsSharedSheetChange> SharedSheetChanges => Set<WsSharedSheetChange>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            modelBuilder.Entity<WsCampaign>(e =>
-            {
-                e.ToTable("ws_campaigns");
-                e.HasOne(c => c.Import).WithMany()
-                    .HasForeignKey(c => c.ImportId).OnDelete(DeleteBehavior.SetNull);
-            });
-            modelBuilder.Entity<WsCampaignImport>().ToTable("ws_campaign_imports");
+            modelBuilder.Entity<WsCampaign>().ToTable("ws_campaigns");
             modelBuilder.Entity<WsCampaignHistory>(e =>
             {
                 e.ToTable("ws_campaign_history");
