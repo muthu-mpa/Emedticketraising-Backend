@@ -172,35 +172,50 @@ namespace TeamTrack.Marketing.Services
             if (file.Length <= 0) return WsResult<LeadImportResultDto>.Fail(400, "The file is empty.");
             if (file.Length > MaxImportBytes) return WsResult<LeadImportResultDto>.Fail(400, $"The file is too large (max {MaxImportBytes / 1024 / 1024} MB).");
 
-            List<string[]> sheet;
+            List<List<string[]>> sheets;
             try
             {
                 await using var stream = file.Open();
                 using var ms = new MemoryStream();
                 await stream.CopyToAsync(ms);
                 ms.Position = 0;
-                sheet = ReadFirstSheet(ms);
+                sheets = ReadSheets(ms);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Could not read the uploaded lead sheet {File}", file.FileName);
                 return WsResult<LeadImportResultDto>.Fail(400, "The file could not be read. Make sure it is a valid, unprotected Excel file.");
             }
-            if (sheet.Count == 0) return WsResult<LeadImportResultDto>.Fail(400, "The Excel file has no data.");
+            if (sheets.All(sh => sh.Count == 0)) return WsResult<LeadImportResultDto>.Fail(400, "The Excel file has no data.");
 
-            // the first row with content is the header row; the headers must match exactly (ignoring case and extra spaces)
-            var header = sheet[0].Select(NormalizeHeader).ToArray();
+            // find the header row: across all sheets, the one of the first 30 rows that matches most of the required headers
+            var wanted = ImportHeaders.Select(HeaderKey).ToArray();
+            List<string[]> sheet = sheets.First(sh => sh.Count > 0);
+            var headerAt = 0;
+            var best = -1;
+            foreach (var sh in sheets)
+                for (var ri = 0; ri < Math.Min(sh.Count, 30); ri++)
+                {
+                    var hits = sh[ri].Select(HeaderKey).Count(k => k.Length > 0 && wanted.Contains(k));
+                    if (hits > best) { best = hits; sheet = sh; headerAt = ri; }
+                }
+            var header = sheet[headerAt].Select(HeaderKey).ToArray();
             var col = new Dictionary<string, int>();
             foreach (var h in ImportHeaders)
             {
-                var i = Array.IndexOf(header, NormalizeHeader(h));
+                var i = Array.IndexOf(header, HeaderKey(h));
                 if (i >= 0) col[h] = i;
             }
             var missing = ImportHeaders.Where(h => !col.ContainsKey(h)).ToList();
             if (missing.Count > 0)
-                return WsResult<LeadImportResultDto>.Fail(400, $"Missing required column{(missing.Count > 1 ? "s" : "")}: {string.Join(", ", missing)}.");
+            {
+                var found = sheet[headerAt].Select(c => (c ?? "").Trim()).Where(c => c.Length > 0).Take(10).ToList();
+                return WsResult<LeadImportResultDto>.Fail(400,
+                    $"Missing required column{(missing.Count > 1 ? "s" : "")}: {string.Join(", ", missing)}."
+                    + (found.Count > 0 ? $" Columns found: {string.Join(", ", found)}." : ""));
+            }
 
-            var rows = sheet.Skip(1).ToList();
+            var rows = sheet.Skip(headerAt + 1).ToList();
             if (rows.Count > MaxImportRows) return WsResult<LeadImportResultDto>.Fail(400, $"The file has too many rows (max {MaxImportRows:N0}).");
 
             // existing leads, so the same person is never created twice
@@ -261,13 +276,14 @@ namespace TeamTrack.Marketing.Services
             return WsResult<LeadImportResultDto>.Ok(result);
         }
 
-        private static List<string[]> ReadFirstSheet(Stream stream)
+        private static List<List<string[]>> ReadSheets(Stream stream)
         {
             System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
             using var reader = ExcelDataReader.ExcelReaderFactory.CreateReader(stream);
-            var all = new List<string[]>();
+            var sheets = new List<List<string[]>>();
             do
             {
+                var all = new List<string[]>();
                 while (reader.Read())
                 {
                     var row = new string[reader.FieldCount];
@@ -275,17 +291,13 @@ namespace TeamTrack.Marketing.Services
                         row[i] = Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
                     all.Add(row);
                 }
-                if (all.Any(r => r.Any(c => !string.IsNullOrWhiteSpace(c)))) break; // the first sheet that has content
-                all.Clear();
+                sheets.Add(all);
             } while (reader.NextResult());
-
-            // drop leading blank rows so the header is the first row with content
-            var firstReal = all.FindIndex(r => r.Any(c => !string.IsNullOrWhiteSpace(c)));
-            return firstReal < 0 ? [] : all.Skip(firstReal).ToList();
+            return sheets;
         }
 
-        private static string NormalizeHeader(string? h)
-            => string.Join(' ', (h ?? "").Replace(' ', ' ').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
+        /// <summary>Header comparison key: lower case letters and digits only, so spacing, slashes and brackets do not matter.</summary>
+        private static string HeaderKey(string? h) => new string((h ?? "").Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
         private static string CleanCell(string? v) => (v ?? "").Replace(' ', ' ').Trim();
         private static string Trunc(string v, int max) => v.Length <= max ? v : v[..max];
         private static string? NullIfEmpty(string v) => v.Length == 0 ? null : v;
@@ -295,8 +307,10 @@ namespace TeamTrack.Marketing.Services
         {
             if (!string.IsNullOrWhiteSpace(email)) yield return "e:" + email.Trim().ToLowerInvariant();
             if (!string.IsNullOrWhiteSpace(linkedIn)) yield return "l:" + linkedIn.Trim().TrimEnd('/').ToLowerInvariant();
-            yield return "n:" + name.Trim().ToLowerInvariant() + "|" + (company ?? "").Trim().ToLowerInvariant();
+            yield return "n:" + Squash(name) + "|" + Squash(company);
         }
+
+        private static string Squash(string? v) => string.Join(' ', (v ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 
         public async Task<WsResult<List<LeadSummaryDto>>> BenchAsync(CurrentUser user, string? status)
         {
