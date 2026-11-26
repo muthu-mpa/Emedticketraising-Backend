@@ -50,6 +50,98 @@ namespace TeamTrack.Tests
         }
 
         [Fact]
+        public async Task Upload_history_lists_files_and_undo_removes_only_untouched_leads()
+        {
+            var k = new MarketingKit();
+            var r = Ok(await k.Svc().ImportAsync(k.Mara, Sheet("march.xlsx", Headers,
+                ["Acme", "Jane Roe", "CTO", "", "", "jane@acme.com", ""],
+                ["Beta", "Sam Poe", "CEO", "", "", "sam@beta.com", ""])));
+            var h = Assert.Single(Ok(await k.Svc().ImportsAsync(k.Mara)));
+            Assert.Equal(r.ImportId, h.Id);
+            Assert.Equal("march.xlsx", h.FileName);
+            Assert.Equal(2, h.Imported);
+            Assert.True(h.CanUndo);
+
+            // one lead is picked up: undo must leave it alone
+            var queue = Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery()));
+            Ok(await k.Svc().PickUpAsync(k.Mara, queue.First(l => l.Name == "Jane Roe").Id));
+
+            var undo = Ok(await k.Svc().UndoImportAsync(k.Mara, h.Id));
+            Assert.Equal(1, undo.Removed);
+            Assert.Equal(1, undo.Kept);
+            Assert.Empty(Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())));
+            Assert.Single(Ok(await k.Svc().BenchAsync(k.Mara, null)));
+
+            var after = Assert.Single(Ok(await k.Svc().ImportsAsync(k.Mara)));
+            Assert.True(after.Undone);
+            Assert.False(after.CanUndo);
+            Fails(await k.Svc().UndoImportAsync(k.Mara, h.Id), 409, "already");
+
+            // the removed person can be uploaded again
+            Assert.Equal(1, Ok(await k.Svc().ImportAsync(k.Mara, Sheet("march.xlsx", Headers,
+                ["Beta", "Sam Poe", "CEO", "", "", "sam@beta.com", ""]))).Imported);
+        }
+
+        [Fact]
+        public async Task A_waiting_lead_can_be_removed_but_not_one_on_a_bench()
+        {
+            var k = new MarketingKit();
+            Ok(await k.Svc().ImportAsync(k.Mara, Sheet("a.xlsx", Headers,
+                ["Acme", "Jane Roe", "CTO", "", "", "jane@acme.com", ""],
+                ["Beta", "Sam Poe", "CEO", "", "", "sam@beta.com", ""])));
+            var queue = Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery()));
+            var jane = queue.First(l => l.Name == "Jane Roe");
+            var sam = queue.First(l => l.Name == "Sam Poe");
+            Ok(await k.Svc().PickUpAsync(k.Mara, sam.Id));
+
+            Fails(await k.Svc().RemoveFromQueueAsync(k.Mara, sam.Id), 409, "work queue");
+            Ok(await k.Svc().RemoveFromQueueAsync(k.Mara, jane.Id));
+            Assert.Empty(Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())));
+            Fails(await k.Svc().RemoveFromQueueAsync(k.Mara, jane.Id), 404, "not found");
+        }
+
+        [Fact]
+        public async Task Removing_a_queue_lead_also_deletes_its_history_attachments_and_stored_files()
+        {
+            var k = new MarketingKit();
+            var imp = Ok(await k.Svc().ImportAsync(k.Mara, Sheet("a.xlsx", Headers,
+                ["Acme", "Jane Roe", "CTO", "", "", "jane@acme.com", ""],
+                ["Beta", "Sam Poe", "CEO", "", "", "sam@beta.com", ""])));
+            var jane = Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())).First(l => l.Name == "Jane Roe");
+
+            // Jane was worked on (note + file) and then returned to the queue, so she carries history and a stored file
+            Ok(await k.Svc().PickUpAsync(k.Mara, jane.Id));
+            Ok(await k.Svc().AddHistoryAsync(k.Mara, jane.Id, new HistoryInput
+            { Kind = "Note", Text = "Called", Files = [MarketingKit.File("brief.pdf", [1, 2, 3])] }));
+            Ok(await k.Svc().ReturnAsync(k.Mara, jane.Id));
+            Assert.Single(k.Files.Stored);
+
+            Assert.Equal(2, Assert.Single(Ok(await k.Svc().ImportsAsync(k.Mara))).Remaining);
+            var removed = Ok(await k.Svc().RemoveFromQueueAsync(k.Noah, jane.Id));
+            Assert.Equal("Jane Roe", removed.Name);
+
+            Assert.Empty(k.Files.Stored);
+            Assert.DoesNotContain(Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())), l => l.Id == jane.Id);
+            Assert.Equal(1, Assert.Single(Ok(await k.Svc().ImportsAsync(k.Mara))).Remaining);
+            await using var db = k.NewContext();
+            Assert.Empty(db.History.Where(h => h.LeadId == jane.Id));
+            Assert.Empty(db.Attachments);
+        }
+
+        [Fact]
+        public async Task Removing_is_refused_for_owned_closed_and_unknown_leads()
+        {
+            var k = new MarketingKit();
+            var owned = await k.AddLeadAsync("Owned One", owner: 1);
+            var closed = await k.AddLeadAsync("Closed One", stage: "Closed");
+            Fails(await k.Svc().RemoveFromQueueAsync(k.Noah, owned), 409, "work queue");
+            Fails(await k.Svc().RemoveFromQueueAsync(k.Mara, closed), 409, "work queue");
+            Fails(await k.Svc().RemoveFromQueueAsync(k.Mara, Guid.NewGuid()), 404, "not found");
+            await using var db = k.NewContext();
+            Assert.Equal(2, db.Leads.Count()); // nothing was deleted
+        }
+
+        [Fact]
         public async Task Empty_rows_missing_names_and_duplicates_are_skipped_and_counted()
         {
             var k = new MarketingKit();
@@ -132,9 +224,13 @@ namespace TeamTrack.Tests
             var messy = new[] { "  organization ", "CONTACT   NAME", "title / role", "org phone", "exact linkedin url", "email (possible)", " org email" };
             Assert.Equal(1, Ok(await k.Svc().ImportAsync(k.Mara, Sheet("a.xlsx", messy, ["Acme", "Jane", "", "", "", "", ""]))).Imported);
 
-            var bad = Headers.Where(h => h != "ORG PHONE" && h != "ORG EMAIL").ToArray();
-            var f = Fails(await k.Svc().ImportAsync(k.Mara, Sheet("b.xlsx", bad, ["a", "b", "c", "d", "e"])), 400, "ORG PHONE");
-            Assert.Contains("ORG EMAIL", f.Message);
+            var bad = Headers.Where(h => h != "Organization" && h != "Contact Name").ToArray();
+            var f = Fails(await k.Svc().ImportAsync(k.Mara, Sheet("b.xlsx", bad, ["a", "b", "c", "d", "e"])), 400, "Organization");
+            Assert.Contains("Contact Name", f.Message);
+
+            // the newer sheet layout: renamed columns, no org phone / org email
+            var newer = new[] { "ORGANIZATION NAME", "COMPANY LINKEDIN URL", "CONTACT NAME", "DESIGNATION / JOB TITLE", "PERSONAL LINKEDIN URL", "WORK EMAIL", "CONTACT NUMBER" };
+            Assert.Equal(1, Ok(await k.Svc().ImportAsync(k.Mara, Sheet("c.xlsx", newer, ["Beta", "https://co", "Sam", "CEO", "https://in/sam", "sam@beta.com", "555"]))).Imported);
         }
 
         [Fact]
@@ -158,7 +254,7 @@ namespace TeamTrack.Tests
         public async Task A_missing_column_or_wrong_file_is_rejected()
         {
             var k = new MarketingKit();
-            Fails(await k.Svc().ImportAsync(k.Mara, Sheet("leads.xlsx", Headers.Take(5).ToArray(), ["a", "b", "c", "d", "e"])), 400, "ORG EMAIL");
+            Fails(await k.Svc().ImportAsync(k.Mara, Sheet("leads.xlsx", Headers.Skip(2).ToArray(), ["a", "b", "c", "d", "e"])), 400, "Organization");
             Fails(await k.Svc().ImportAsync(k.Mara, new IncomingFile("leads.csv", 3, () => new MemoryStream([1, 2, 3]))), 400, "Excel");
             Fails(await k.Svc().ImportAsync(k.Mara, new IncomingFile("leads.xlsx", 3, () => new MemoryStream([1, 2, 3]))), 400, "could not be read");
             Assert.Empty(Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())));
@@ -179,6 +275,53 @@ namespace TeamTrack.Tests
             var bytes = ms.ToArray();
             var r = Ok(await k.Svc().ImportAsync(k.Mara, new IncomingFile("leads.xlsx", bytes.Length, () => new MemoryStream(bytes))));
             Assert.Equal(1, r.Imported);
+        }
+
+        private static readonly string[] Template23 =
+        [
+            "UNIQUE ID", "ORGANIZATION", "BUSINESS CATEGORY", "LOCATION", "OFFICIAL WEBSITE", "ORG LINKEDIN URL", "LEAD ID", "LEAD NAME",
+            "DESIGNATION / JOB TITLE", "DECISION-MAKER LEVEL", "LEAD LINKEDIN URL", "LEAD EMAIL", "CONTACT NUMBER", "CONTACT TYPE",
+            "EMEDLOGIX SOLUTION", "POTENTIAL BUSINESS OPPORTUNITY", "EMEDLOGIX FIT / REASON FOR TARGETING", "PROSPECT PRIORITY", "STATUS",
+            "LAST CONTACTED", "NEXT ACTION", "NEXT ACTION DATE", "REMARKS", "Custom Extra",
+        ];
+
+        [Fact]
+        public async Task The_23_column_template_maps_standard_fields_and_keeps_every_column()
+        {
+            var k = new MarketingKit();
+            string[] row = ["U1", "Acme", "Health", "NYC", "https://acme.com", "https://linkedin.com/company/acme", "L1", "Jane Roe", "CTO", "C-level",
+                "https://linkedin.com/in/jane", "jane@acme.com", "555", "Direct", "Sol", "Big", "Fit", "High", "New", "2026-01-05", "Call", "2026-02-01", "", "extra!"];
+            Assert.Equal(1, Ok(await k.Svc().ImportAsync(k.Mara, Sheet("n.xlsx", Template23, row))).Imported);
+
+            var l = Assert.Single(Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())));
+            Assert.Equal("Jane Roe", l.Name);
+            Assert.Equal("CTO", l.Title);
+            Assert.Equal("jane@acme.com", l.PossibleEmail);
+            Assert.Equal("555", l.Phone);
+            Assert.Null(l.OrgPhone);
+            Assert.Equal("https://linkedin.com/in/jane", l.LinkedInUrl);
+
+            // the extra data survives pick up and a stage change
+            Ok(await k.Svc().PickUpAsync(k.Mara, l.Id));
+            var d = Ok(await k.Svc().SetStageAsync(k.Mara, l.Id, "Contacted"));
+            Assert.Equal(24, d.ImportedFields.Count);
+            Assert.Equal(Template23, d.ImportedFields.Select(f => f.Name).ToArray());
+            Assert.Equal("https://linkedin.com/company/acme", d.ImportedFields[5].Value);
+            Assert.Equal("", d.ImportedFields[22].Value);
+            Assert.Equal("extra!", d.ImportedFields[23].Value);
+        }
+
+        [Fact]
+        public async Task Legacy_sheets_keep_their_columns_and_a_company_linkedin_is_not_the_leads()
+        {
+            var k = new MarketingKit();
+            Ok(await k.Svc().ImportAsync(k.Mara, Sheet("a.xlsx", Headers, ["Acme", "Jane", "CTO", "1", "https://www.linkedin.com/company/acme", "", "info@acme.com"])));
+            var l = Assert.Single(Ok(await k.Svc().QueueAsync(k.Mara, new QueueQuery())));
+            Assert.Null(l.LinkedInUrl);
+            Ok(await k.Svc().PickUpAsync(k.Mara, l.Id));
+            var d = Ok(await k.Svc().GetAsync(k.Mara, l.Id));
+            Assert.Equal(Headers, d.ImportedFields.Select(f => f.Name).ToArray());
+            Assert.Equal("https://www.linkedin.com/company/acme", d.ImportedFields[4].Value);
         }
     }
 }

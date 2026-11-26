@@ -55,6 +55,18 @@ namespace TeamTrack.Marketing.Controllers
             return Respond(await _marketing.ImportAsync(Me, new IncomingFile(file.FileName, file.Length, file.OpenReadStream)));
         }
 
+        /// <summary>The upload history (newest first), each with what can still be undone.</summary>
+        [HttpGet("leads/imports")]
+        public async Task<IActionResult> Imports() => Respond(await _marketing.ImportsAsync(Me));
+
+        /// <summary>Undo an upload: deletes its leads that are still untouched in the queue.</summary>
+        [HttpPost("leads/imports/{id:guid}/undo")]
+        public async Task<IActionResult> UndoImport(Guid id) => Respond(await _marketing.UndoImportAsync(Me, id));
+
+        /// <summary>Removes (deletes) a lead that is waiting in the work queue.</summary>
+        [HttpDelete("leads/{id:guid}")]
+        public async Task<IActionResult> Remove(Guid id) => Respond(await _marketing.RemoveFromQueueAsync(Me, id));
+
         [HttpGet("leads/bench")]
         public async Task<IActionResult> Bench([FromQuery] string? status) => Respond(await _marketing.BenchAsync(Me, status));
 

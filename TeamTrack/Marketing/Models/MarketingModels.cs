@@ -35,6 +35,10 @@ namespace TeamTrack.Marketing.Models
         public string? LinkedInUrl { get; set; }
         public string? PossibleEmail { get; set; }
         public string? OrgEmail { get; set; }
+        /// <summary>The complete imported Excel row as JSON [{"name","value"}] (original headers, column order). Never rewritten after import.</summary>
+        public string? AdditionalData { get; set; }
+        /// <summary>The Excel upload this lead came from (null for leads that were not imported). Used by "undo upload".</summary>
+        public Guid? ImportId { get; set; }
         public string Channel { get; set; } = string.Empty;
         public string Campaign { get; set; } = string.Empty;
         public string Interest { get; set; } = string.Empty;
@@ -80,6 +84,22 @@ namespace TeamTrack.Marketing.Models
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         public MkLeadHistoryEntry? HistoryEntry { get; set; }
+    }
+
+    /// <summary>One Excel upload: the "uploaded files" history shown under the work queue.</summary>
+    public class MkLeadImport
+    {
+        public Guid Id { get; set; }
+        public string FileName { get; set; } = string.Empty;
+        public long SizeBytes { get; set; }
+        public int TotalRows { get; set; }
+        public int Imported { get; set; }
+        public int Skipped { get; set; }
+        public int Duplicates { get; set; }
+        public int? UploadedByUserId { get; set; }
+        public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UndoneAt { get; set; }
+        public int? UndoneByUserId { get; set; }
     }
 
     /// <summary>One line of the dashboard's recent activity.</summary>

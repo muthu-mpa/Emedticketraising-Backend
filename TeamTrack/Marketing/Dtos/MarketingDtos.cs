@@ -48,8 +48,16 @@ namespace TeamTrack.Marketing.Dtos
 
     public class LeadDetailDto : LeadSummaryDto
     {
+        /// <summary>Every column of the imported Excel row with its original header, in column order (empty for leads not imported from Excel).</summary>
+        public List<ImportedFieldDto> ImportedFields { get; set; } = [];
         /// <summary>Newest first.</summary>
         public List<HistoryEntryDto> History { get; set; } = [];
+    }
+
+    public class ImportedFieldDto
+    {
+        public string Name { get; set; } = "";
+        public string Value { get; set; } = "";
     }
 
     public class HistoryEntryDto
@@ -74,8 +82,41 @@ namespace TeamTrack.Marketing.Dtos
         public DateTime? SignedAt { get; set; }
     }
 
+    /// <summary>One row of the upload history.</summary>
+    public class ImportHistoryDto
+    {
+        public Guid Id { get; set; }
+        public string FileName { get; set; } = "";
+        public long SizeBytes { get; set; }
+        public string? UploadedByName { get; set; }
+        public DateTime UploadedAt { get; set; }
+        public int TotalRows { get; set; }
+        public int Imported { get; set; }
+        public int Skipped { get; set; }
+        public int Duplicates { get; set; }
+        /// <summary>Leads of this upload that still exist (some may have been removed, or moved to a work bench).</summary>
+        public int Remaining { get; set; }
+        /// <summary>Leads of this upload that can still be removed by undo (untouched, still in the queue).</summary>
+        public int Undoable { get; set; }
+        public bool Undone { get; set; }
+        public DateTime? UndoneAt { get; set; }
+        public string? UndoneByName { get; set; }
+        public bool CanUndo { get; set; }
+    }
+
+    public class UndoImportResultDto
+    {
+        public Guid ImportId { get; set; }
+        public string FileName { get; set; } = "";
+        /// <summary>Leads deleted by the undo.</summary>
+        public int Removed { get; set; }
+        /// <summary>Leads left alone because someone already started working on them.</summary>
+        public int Kept { get; set; }
+    }
+
     public class LeadImportResultDto
     {
+        public Guid ImportId { get; set; }
         public string FileName { get; set; } = "";
         public int TotalRows { get; set; }
         public int Imported { get; set; }

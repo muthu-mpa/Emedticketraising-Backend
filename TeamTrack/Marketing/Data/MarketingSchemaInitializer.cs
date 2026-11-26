@@ -40,6 +40,9 @@ namespace TeamTrack.Marketing.Data
             ALTER TABLE mk_leads ADD COLUMN IF NOT EXISTS linked_in_url text;
             ALTER TABLE mk_leads ADD COLUMN IF NOT EXISTS possible_email text;
             ALTER TABLE mk_leads ADD COLUMN IF NOT EXISTS org_email text;
+            ALTER TABLE mk_leads ADD COLUMN IF NOT EXISTS additional_data text;
+            ALTER TABLE mk_leads ADD COLUMN IF NOT EXISTS import_id uuid;
+            CREATE INDEX IF NOT EXISTS ""IX_mk_leads_import_id"" ON mk_leads (import_id);
             CREATE INDEX IF NOT EXISTS ""IX_mk_leads_owner_user_id"" ON mk_leads (owner_user_id);
             CREATE INDEX IF NOT EXISTS ""IX_mk_leads_stage"" ON mk_leads (stage);
 
@@ -73,6 +76,23 @@ namespace TeamTrack.Marketing.Data
                 CONSTRAINT ""FK_mk_lead_attachments_mk_lead_history_history_entry_id"" FOREIGN KEY (history_entry_id) REFERENCES mk_lead_history (id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS ""IX_mk_lead_attachments_history_entry_id"" ON mk_lead_attachments (history_entry_id);
+
+            CREATE TABLE IF NOT EXISTS mk_lead_imports (
+                id uuid NOT NULL,
+                file_name text NOT NULL,
+                size_bytes bigint NOT NULL,
+                total_rows integer NOT NULL,
+                imported integer NOT NULL,
+                skipped integer NOT NULL,
+                duplicates integer NOT NULL,
+                uploaded_by_user_id integer,
+                uploaded_at timestamp with time zone NOT NULL,
+                undone_at timestamp with time zone,
+                undone_by_user_id integer,
+                CONSTRAINT ""PK_mk_lead_imports"" PRIMARY KEY (id),
+                CONSTRAINT ""FK_mk_lead_imports_users_uploaded_by"" FOREIGN KEY (uploaded_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS ""IX_mk_lead_imports_uploaded_at"" ON mk_lead_imports (uploaded_at);
 
             CREATE TABLE IF NOT EXISTS mk_activity (
                 id uuid NOT NULL,

@@ -17,6 +17,7 @@ namespace TeamTrack.Marketing.Data
         public DbSet<MkLeadHistoryEntry> History => Set<MkLeadHistoryEntry>();
         public DbSet<MkLeadAttachment> Attachments => Set<MkLeadAttachment>();
         public DbSet<MkActivity> Activity => Set<MkActivity>();
+        public DbSet<MkLeadImport> Imports => Set<MkLeadImport>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -33,6 +34,8 @@ namespace TeamTrack.Marketing.Data
                 e.HasOne(a => a.HistoryEntry).WithMany(h => h.Attachments).HasForeignKey(a => a.HistoryEntryId).OnDelete(DeleteBehavior.Cascade);
             });
             modelBuilder.Entity<MkActivity>().ToTable("mk_activity");
+            modelBuilder.Entity<MkLeadImport>().ToTable("mk_lead_imports");
+            modelBuilder.Entity<MkLead>().HasIndex(l => l.ImportId);
 
             // snake_case columns, matching the rest of the schema
             foreach (var entity in modelBuilder.Model.GetEntityTypes())

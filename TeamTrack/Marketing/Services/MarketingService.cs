@@ -17,6 +17,9 @@ namespace TeamTrack.Marketing.Services
         Task<WsResult<List<LeadSummaryDto>>> BenchAsync(CurrentUser user, string? status);
         Task<WsResult<LeadDetailDto>> GetAsync(CurrentUser user, Guid id);
         Task<WsResult<LeadImportResultDto>> ImportAsync(CurrentUser user, IncomingFile file);
+        Task<WsResult<List<ImportHistoryDto>>> ImportsAsync(CurrentUser user);
+        Task<WsResult<UndoImportResultDto>> UndoImportAsync(CurrentUser user, Guid importId);
+        Task<WsResult<LeadSummaryDto>> RemoveFromQueueAsync(CurrentUser user, Guid id);
         Task<WsResult<LeadDetailDto>> PickUpAsync(CurrentUser user, Guid id);
         Task<WsResult<LeadSummaryDto>> ReturnAsync(CurrentUser user, Guid id);
         Task<WsResult<LeadDetailDto>> SetStageAsync(CurrentUser user, Guid id, string? stage);
@@ -162,6 +165,21 @@ namespace TeamTrack.Marketing.Services
         public const int MaxImportRows = 5000;
         public static readonly string[] ImportHeaders =
             ["Organization", "Contact Name", "Title / Role", "ORG PHONE", "EXACT LinkedIn URL", "EMAIL (POSSIBLE)", "ORG EMAIL"];
+        /// <summary>Only these must be present; the other columns are optional.</summary>
+        private static readonly string[] RequiredImportHeaders = ["Organization", "Contact Name"];
+        /// <summary>Other names a column may go by (e.g. the newer sheet layout). Company LinkedIn URL is deliberately not an alias.</summary>
+        private static readonly Dictionary<string, string[]> ImportAliases = new()
+        {
+            ["Organization"] = ["Organization Name", "Company", "Company Name"],
+            ["ORG PHONE"] = [],
+            ["Title / Role"] = ["Designation / Job Title", "Designation", "Job Title", "Title"],
+            ["Contact Name"] = ["Lead Name", "Name", "Full Name"],
+            ["Contact Number"] = ["Phone", "Phone Number", "Mobile"],
+            ["EXACT LinkedIn URL"] = ["Lead LinkedIn URL", "Personal LinkedIn URL", "LinkedIn URL"],
+            ["EMAIL (POSSIBLE)"] = ["Lead Email", "Work Email", "Email"],
+        };
+        /// <summary>Standard fields filled from the sheet (the legacy seven plus the lead's own phone).</summary>
+        private static readonly string[] MappedKeys = [.. ImportHeaders, "Contact Number"];
         private const int ImportScore = 20;
 
         public async Task<WsResult<LeadImportResultDto>> ImportAsync(CurrentUser user, IncomingFile file)
@@ -189,7 +207,7 @@ namespace TeamTrack.Marketing.Services
             if (sheets.All(sh => sh.Count == 0)) return WsResult<LeadImportResultDto>.Fail(400, "The Excel file has no data.");
 
             // find the header row: across all sheets, the one of the first 30 rows that matches most of the required headers
-            var wanted = ImportHeaders.Select(HeaderKey).ToArray();
+            var wanted = MappedKeys.Concat(ImportAliases.Values.SelectMany(a => a)).Select(HeaderKey).ToArray();
             List<string[]> sheet = sheets.First(sh => sh.Count > 0);
             var headerAt = 0;
             var best = -1;
@@ -201,12 +219,13 @@ namespace TeamTrack.Marketing.Services
                 }
             var header = sheet[headerAt].Select(HeaderKey).ToArray();
             var col = new Dictionary<string, int>();
-            foreach (var h in ImportHeaders)
+            foreach (var h in MappedKeys)
             {
-                var i = Array.IndexOf(header, HeaderKey(h));
+                var names = new[] { h }.Concat(ImportAliases.GetValueOrDefault(h) ?? []);
+                var i = names.Select(n => Array.IndexOf(header, HeaderKey(n))).FirstOrDefault(x => x >= 0, -1);
                 if (i >= 0) col[h] = i;
             }
-            var missing = ImportHeaders.Where(h => !col.ContainsKey(h)).ToList();
+            var missing = RequiredImportHeaders.Where(h => !col.ContainsKey(h)).ToList();
             if (missing.Count > 0)
             {
                 var found = sheet[headerAt].Select(c => (c ?? "").Trim()).Where(c => c.Length > 0).Take(10).ToList();
@@ -225,10 +244,12 @@ namespace TeamTrack.Marketing.Services
             foreach (var e in existing)
                 foreach (var k in ImportKeys(e.Name, e.Company, e.PossibleEmail ?? e.Email, e.LinkedInUrl)) seen.Add(k);
 
-            var result = new LeadImportResultDto { FileName = DisplayName(file.FileName) };
+            var importId = Guid.NewGuid();
+            var result = new LeadImportResultDto { ImportId = importId, FileName = DisplayName(file.FileName) };
             var now = Now;
             var newLeads = new List<MkLead>();
-            string Cell(string[] r, string h) => col[h] < r.Length ? CleanCell(r[col[h]]) : "";
+            var headerNames = NameColumns(sheet[headerAt]);
+            string Cell(string[] r, string h) => col.TryGetValue(h, out var ci) && ci < r.Length ? CleanCell(r[ci]) : "";
             void Issue(int row, string why) { if (result.Issues.Count < 20) result.Issues.Add($"Row {row}: {why}"); }
 
             for (var n = 0; n < rows.Count; n++)
@@ -245,6 +266,8 @@ namespace TeamTrack.Marketing.Services
                 var possible = Cell(r, "EMAIL (POSSIBLE)");
                 var orgEmail = Cell(r, "ORG EMAIL");
                 var linkedIn = Cell(r, "EXACT LinkedIn URL");
+                // a company page is organization data, not the person's profile: it stays only in the imported fields
+                if (IsOrgLinkedIn(linkedIn)) linkedIn = "";
                 var keys = ImportKeys(name, org, possible, linkedIn).ToList();
                 if (keys.Any(seen.Contains)) { result.Skipped++; result.Duplicates++; Issue(rowNo, $"{name} is already in the system or earlier in this file."); continue; }
                 foreach (var k in keys) seen.Add(k);
@@ -253,7 +276,8 @@ namespace TeamTrack.Marketing.Services
                 {
                     Id = Guid.NewGuid(), Name = Trunc(name, 200), Title = Trunc(Cell(r, "Title / Role"), 200), Company = Trunc(org, 200),
                     Email = Trunc(possible.Length > 0 ? possible : orgEmail, 320),
-                    OrgPhone = NullIfEmpty(Trunc(Cell(r, "ORG PHONE"), 60)), LinkedInUrl = NullIfEmpty(Trunc(linkedIn, 500)),
+                    OrgPhone = NullIfEmpty(Trunc(Cell(r, "ORG PHONE"), 60)), Phone = NullIfEmpty(Trunc(Cell(r, "Contact Number"), 60)),
+                    ImportId = importId, AdditionalData = BuildAdditionalData(headerNames, r), LinkedInUrl = NullIfEmpty(Trunc(linkedIn, 500)),
                     PossibleEmail = NullIfEmpty(Trunc(possible, 320)), OrgEmail = NullIfEmpty(Trunc(orgEmail, 320)),
                     Channel = "Excel import", Campaign = "Excel import", Interest = "Not sure yet",
                     Score = ImportScore, Stage = "New", Consent = false, CreatedAt = now, UpdatedAt = now,
@@ -270,11 +294,142 @@ namespace TeamTrack.Marketing.Services
             if (newLeads.Count > 0)
             {
                 _db.Leads.AddRange(newLeads);
+                _db.Imports.Add(new MkLeadImport
+                {
+                    Id = importId, FileName = result.FileName, SizeBytes = file.Length, TotalRows = result.TotalRows, Imported = result.Imported,
+                    Skipped = result.Skipped, Duplicates = result.Duplicates, UploadedByUserId = user.Id, UploadedAt = now,
+                });
                 AddActivity($"{user.Name} imported {newLeads.Count} lead{(newLeads.Count == 1 ? "" : "s")} from {result.FileName}", now, user);
                 await _db.SaveChangesAsync();
             }
             return WsResult<LeadImportResultDto>.Ok(result);
         }
+
+        // ---------- upload history, undo, remove ----------
+
+        public const int MaxImportHistory = 100;
+
+        /// <summary>A lead an undo may delete: still in the queue, still "New", with nothing logged on it except its import entry.</summary>
+        private IQueryable<MkLead> Untouched(Guid importId)
+            => _db.Leads.Where(l => l.ImportId == importId && l.OwnerUserId == null && l.Stage == "New"
+                && !_db.History.Any(h => h.LeadId == l.Id && h.Kind != "Captured"));
+
+        public async Task<WsResult<List<ImportHistoryDto>>> ImportsAsync(CurrentUser user)
+        {
+            var imports = await _db.Imports.AsNoTracking().OrderByDescending(i => i.UploadedAt).Take(MaxImportHistory).ToListAsync();
+            var ids = imports.Select(i => i.Id).ToList();
+            var remaining = ids.Count == 0 ? [] : (await _db.Leads.AsNoTracking()
+                .Where(l => l.ImportId != null && ids.Contains(l.ImportId.Value))
+                .GroupBy(l => l.ImportId!.Value).Select(g => new { Id = g.Key, Count = g.Count() }).ToListAsync())
+                .ToDictionary(x => x.Id, x => x.Count);
+            var undoable = ids.Count == 0 ? [] : (await _db.Leads.AsNoTracking()
+                .Where(l => l.ImportId != null && ids.Contains(l.ImportId.Value) && l.OwnerUserId == null && l.Stage == "New"
+                    && !_db.History.Any(h => h.LeadId == l.Id && h.Kind != "Captured"))
+                .GroupBy(l => l.ImportId!.Value).Select(g => new { Id = g.Key, Count = g.Count() }).ToListAsync())
+                .ToDictionary(x => x.Id, x => x.Count);
+            var names = await NamesAsync(imports.SelectMany(i => new[] { i.UploadedByUserId, i.UndoneByUserId }).Where(x => x != null).Select(x => x!.Value));
+
+            string? Name(int? id) => id != null && names.TryGetValue(id.Value, out var n) ? n : null;
+            return WsResult<List<ImportHistoryDto>>.Ok(imports.Select(i =>
+            {
+                var canUndo = i.UndoneAt == null && undoable.GetValueOrDefault(i.Id) > 0;
+                return new ImportHistoryDto
+                {
+                    Id = i.Id, FileName = i.FileName, SizeBytes = i.SizeBytes, UploadedByName = Name(i.UploadedByUserId), UploadedAt = Utc(i.UploadedAt),
+                    TotalRows = i.TotalRows, Imported = i.Imported, Skipped = i.Skipped, Duplicates = i.Duplicates,
+                    Remaining = remaining.GetValueOrDefault(i.Id), Undoable = undoable.GetValueOrDefault(i.Id),
+                    Undone = i.UndoneAt != null, UndoneAt = Utc(i.UndoneAt), UndoneByName = Name(i.UndoneByUserId), CanUndo = canUndo,
+                };
+            }).ToList());
+        }
+
+        public async Task<WsResult<UndoImportResultDto>> UndoImportAsync(CurrentUser user, Guid importId)
+        {
+            var import = await _db.Imports.FirstOrDefaultAsync(i => i.Id == importId);
+            if (import == null) return WsResult<UndoImportResultDto>.Fail(404, "Upload not found.");
+            if (import.UndoneAt != null) return WsResult<UndoImportResultDto>.Fail(409, "This upload has already been undone.");
+
+            var now = Now;
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            var ids = await Untouched(importId).Select(l => l.Id).ToListAsync();
+            if (ids.Count == 0)
+                return WsResult<UndoImportResultDto>.Fail(409, "Nothing can be undone: every lead from this upload has already been worked on or removed.");
+
+            await _db.History.Where(h => ids.Contains(h.LeadId)).ExecuteDeleteAsync();
+            // re-check the conditions in the DELETE itself so a lead picked up a moment ago is never removed
+            var removed = await _db.Leads.Where(l => ids.Contains(l.Id) && l.OwnerUserId == null && l.Stage == "New").ExecuteDeleteAsync();
+            var kept = await _db.Leads.CountAsync(l => l.ImportId == importId);
+
+            import.UndoneAt = now;
+            import.UndoneByUserId = user.Id;
+            AddActivity($"{user.Name} undid the upload {import.FileName} ({removed} lead{(removed == 1 ? "" : "s")} removed)", now, user);
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            return WsResult<UndoImportResultDto>.Ok(new UndoImportResultDto { ImportId = importId, FileName = import.FileName, Removed = removed, Kept = kept },
+                kept == 0 ? "Upload undone." : $"Upload undone. {kept} lead{(kept == 1 ? " was" : "s were")} kept because work has already started on {(kept == 1 ? "it" : "them")}.");
+        }
+
+        public async Task<WsResult<LeadSummaryDto>> RemoveFromQueueAsync(CurrentUser user, Guid id)
+        {
+            var lead = await _db.Leads.AsNoTracking().FirstOrDefaultAsync(l => l.Id == id);
+            if (lead == null) return NotFound<LeadSummaryDto>();
+            if (lead.OwnerUserId != null || !MarketingValues.IsOpen(lead.Stage))
+                return WsResult<LeadSummaryDto>.Fail(409, "Only leads waiting in the work queue can be removed.");
+
+            var summary = (await ToSummariesAsync([lead], user))[0];
+            // a returned lead can carry logged files; their stored copies go once the database delete is committed
+            var storedFiles = await (from a in _db.Attachments join h in _db.History on a.HistoryEntryId equals h.Id
+                                     where h.LeadId == id select a.StoragePath).ToListAsync();
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            try
+            {
+                // Claim the delete first (same conditions as the queue) so a lead picked up a moment ago is never touched.
+                // Dependents are deleted explicitly, in order, instead of relying on ON DELETE CASCADE of older tables.
+                var historyIds = _db.History.Where(h => h.LeadId == id).Select(h => h.Id);
+                await _db.Attachments.Where(a => historyIds.Contains(a.HistoryEntryId)).ExecuteDeleteAsync();
+                await _db.History.Where(h => h.LeadId == id).ExecuteDeleteAsync();
+                var removed = await _db.Leads.Where(l => l.Id == id && l.OwnerUserId == null && l.Stage != MarketingValues.Closed).ExecuteDeleteAsync();
+                if (removed != 1)
+                {
+                    await tx.RollbackAsync(); // puts the attachments and history back
+                    return WsResult<LeadSummaryDto>.Fail(409, "This lead has just been picked up by someone else.");
+                }
+                AddActivity($"{user.Name} removed {lead.Name} from the queue", Now, user);
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Removing lead {LeadId} from the queue failed.", id);
+                throw;
+            }
+            foreach (var name in storedFiles) _files.Delete(name);
+            return WsResult<LeadSummaryDto>.Ok(summary, "Removed from the queue.");
+        }
+
+        /// <summary>Original header text per column; a blank header becomes "Column N" so no value is left without a name.</summary>
+        private static string[] NameColumns(string[] header)
+            => header.Select((h, i) => { var t = CleanCell(h); return t.Length > 0 ? t : $"Column {i + 1}"; }).ToArray();
+
+        /// <summary>The whole Excel row as JSON [{"name","value"}] in column order. A list, not an object, so duplicate headers survive.</summary>
+        private static string BuildAdditionalData(string[] names, string[] row)
+        {
+            var fields = names.Select((n, i) => new ImportedFieldDto { Name = n, Value = i < row.Length ? CleanCell(row[i]) : "" }).ToList();
+            // drop trailing columns that have neither a real header nor a value
+            while (fields.Count > 0 && fields[^1].Value.Length == 0 && fields[^1].Name.StartsWith("Column ")) fields.RemoveAt(fields.Count - 1);
+            return JsonSerializer.Serialize(fields);
+        }
+
+        private static List<ImportedFieldDto> ParseAdditionalData(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return [];
+            try { return JsonSerializer.Deserialize<List<ImportedFieldDto>>(json) ?? []; }
+            catch (JsonException) { return []; }
+        }
+
+        private static bool IsOrgLinkedIn(string url)
+            => url.Contains("linkedin.com/company", StringComparison.OrdinalIgnoreCase) || url.Contains("linkedin.com/school", StringComparison.OrdinalIgnoreCase);
 
         private static List<List<string[]>> ReadSheets(Stream stream)
         {
@@ -288,7 +443,11 @@ namespace TeamTrack.Marketing.Services
                 {
                     var row = new string[reader.FieldCount];
                     for (var i = 0; i < row.Length; i++)
-                        row[i] = Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                        row[i] = reader.GetValue(i) switch
+                        {
+                            DateTime d => d.TimeOfDay == TimeSpan.Zero ? d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : d.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
+                            var v => Convert.ToString(v, CultureInfo.InvariantCulture) ?? "",
+                        };
                     all.Add(row);
                 }
                 sheets.Add(all);
@@ -699,6 +858,7 @@ namespace TeamTrack.Marketing.Services
                 .Concat(lead.OwnerUserId is int owner ? [owner] : []));
 
             var dto = Fill(new LeadDetailDto(), lead, user, names, contact.Count == 0 ? null : contact.Max(e => e.OccurredAt), entries.Count(e => e.Kind == "Email sent"));
+            dto.ImportedFields = ParseAdditionalData(lead.AdditionalData);
             dto.History = entries.Select(e => new HistoryEntryDto
             {
                 Id = e.Id, Kind = e.Kind, OccurredAt = Utc(e.OccurredAt), Subject = e.Subject, Body = e.Body, Text = e.Text,
